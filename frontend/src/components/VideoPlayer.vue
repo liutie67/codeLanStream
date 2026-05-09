@@ -12,13 +12,13 @@ function onBackdropClick(e: MouseEvent) {
 
 <template>
   <div
-    class="fixed inset-0 z-50 bg-black/80 flex items-center justify-center"
+    class="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
     @click="onBackdropClick"
   >
-    <div class="relative w-full max-w-4xl mx-4">
+    <div class="relative w-full h-full flex items-center justify-center">
       <button
         @click="emit('close')"
-        class="absolute -top-10 right-0 text-white/70 hover:text-white text-2xl"
+        class="absolute top-0 right-0 text-white/70 hover:text-white text-3xl z-10"
       >
         &times;
       </button>
@@ -27,12 +27,13 @@ function onBackdropClick(e: MouseEvent) {
         :src="getStreamUrl(item.id)"
         controls
         autoplay
-        class="w-full rounded-lg"
+        class="max-w-full max-h-full rounded-lg"
       />
       <img
         v-else
         :src="getStreamUrl(item.id)"
-        class="w-full rounded-lg"
+        class="max-w-full max-h-full object-contain rounded-lg cursor-pointer"
+        @click="emit('close')"
       />
     </div>
   </div>

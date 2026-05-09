@@ -11,6 +11,16 @@
   }
 }
 
+.masonry-1 {
+  column-count: 1 !important;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.masonry-2 {
+  column-count: 2 !important;
+}
+
 .masonry-item {
   break-inside: avoid;
   margin-bottom: 12px;
