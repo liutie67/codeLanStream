@@ -22,12 +22,11 @@ function cycleColMode() {
   colMode.value = modes[(idx + 1) % modes.length]
 }
 
-const colLabel = () => {
-  const map = { auto: '自动', '1': '单列', '2': '双列' }
+const colIcon = () => {
+  const map = { auto: '⊞', '1': '▭', '2': '⊞' }
   return map[colMode.value]
 }
 
-// 无限滚动：距底部约 3 行（~600px）时自动加载
 function onScroll() {
   if (loading.value || !hasMore.value) return
   const bottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY
@@ -41,22 +40,23 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 <template>
   <div class="min-h-screen bg-gray-950 text-white">
     <header class="sticky top-0 z-40 bg-gray-950/90 backdrop-blur border-b border-gray-800">
-      <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-        <h1 class="text-xl font-bold tracking-tight">LanStream</h1>
-        <div class="flex items-center gap-4">
-          <span class="text-sm text-gray-400">{{ total }} 个媒体</span>
+      <div class="max-w-6xl mx-auto px-3 py-2 flex items-center justify-between gap-2">
+        <h1 class="text-lg font-bold tracking-tight shrink-0">LanStream</h1>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500 tabular-nums">{{ total }}</span>
           <button
             @click="cycleColMode"
-            class="px-3 py-1.5 text-xs rounded-full bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors"
+            class="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-gray-400 text-sm hover:bg-gray-700 transition-colors shrink-0"
+            :title="colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列'"
           >
-            {{ colLabel() }}
+            {{ colIcon() }}
           </button>
           <TypeFilter :current="mediaType" @change="setMediaType" />
         </div>
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-4 py-6">
+    <main class="max-w-6xl mx-auto px-3 py-4">
       <div :class="getColClass()">
         <MediaCard
           v-for="item in items"

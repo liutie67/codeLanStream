@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse, MediaOut
+from app.services.thumbnail import generate_thumbnail
 
 
 def _classify_media(ext: str) -> MediaType | None:
@@ -41,6 +42,8 @@ async def scan_directory(dir_path: str, db: AsyncSession) -> int:
             size_bytes=stat.st_size,
             folder=str(file.parent),
         )
+        if media_type == MediaType.VIDEO:
+            media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
         db.add(media)
         count += 1
 

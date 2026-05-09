@@ -9,6 +9,7 @@ export interface MediaItem {
   width: number | null
   height: number | null
   folder: string | null
+  thumbnail_path: string | null
   created_at: string
 }
 

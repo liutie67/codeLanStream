@@ -26,3 +26,7 @@ export async function fetchRandom(count: number = 10): Promise<MediaItem[]> {
 export function getStreamUrl(mediaId: string): string {
   return `${API_BASE}/stream/${mediaId}`
 }
+
+export function getThumbnailUrl(mediaId: string): string {
+  return `${API_BASE}/thumbnail/${mediaId}`
+}

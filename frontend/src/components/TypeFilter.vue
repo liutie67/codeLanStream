@@ -6,28 +6,30 @@ const emit = defineEmits<{
   change: [type: MediaType | null]
 }>()
 
-type FilterOption = { label: string; value: MediaType | null }
+type FilterOption = { label: string; short: string; value: MediaType | null }
 const filters: FilterOption[] = [
-  { label: '全部', value: null },
-  { label: '视频', value: 'video' },
-  { label: '图片', value: 'image' },
+  { label: '全部', short: '全', value: null },
+  { label: '视频', short: '视', value: 'video' },
+  { label: '图片', short: '图', value: 'image' },
 ]
 </script>
 
 <template>
-  <div class="flex gap-2">
+  <div class="flex rounded-full bg-gray-800 p-0.5">
     <button
       v-for="f in filters"
       :key="f.label"
       @click="emit('change', f.value)"
       :class="[
-        'px-4 py-1.5 rounded-full text-sm font-medium transition-colors',
+        'px-2.5 py-1 rounded-full text-xs font-medium transition-colors',
+        'md:px-3 md:text-xs',
         current === f.value
-          ? 'bg-blue-600 text-white'
-          : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
+          ? 'bg-blue-600 text-white shadow-sm'
+          : 'text-gray-400 hover:text-gray-200',
       ]"
     >
-      {{ f.label }}
+      <span class="md:hidden">{{ f.short }}</span>
+      <span class="hidden md:inline">{{ f.label }}</span>
     </button>
   </div>
 </template>

@@ -14,6 +14,19 @@ router = APIRouter(prefix="/api/media", tags=["media"])
 CHUNK_SIZE = 64 * 1024  # 64KB
 
 
+@router.get("/thumbnail/{media_id}")
+async def get_thumbnail(
+    media_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    media = await get_media(db, media_id)
+    if not media or not media.thumbnail_path:
+        raise HTTPException(404, "Thumbnail not found")
+    if not os.path.exists(media.thumbnail_path):
+        raise HTTPException(404, "Thumbnail file missing")
+    return _full_response(media.thumbnail_path, os.path.getsize(media.thumbnail_path), "image/webp")
+
+
 @router.get("/feed", response_model=FeedResponse)
 async def feed(
     page: int = 1,
