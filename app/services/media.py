@@ -42,9 +42,10 @@ async def scan_directory(dir_path: str, db: AsyncSession) -> int:
             size_bytes=stat.st_size,
             folder=str(file.parent),
         )
+        db.add(media)
+        await db.flush()
         if media_type == MediaType.VIDEO:
             media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
-        db.add(media)
         count += 1
 
     await db.commit()

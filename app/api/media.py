@@ -24,7 +24,7 @@ async def get_thumbnail(
         raise HTTPException(404, "Thumbnail not found")
     if not os.path.exists(media.thumbnail_path):
         raise HTTPException(404, "Thumbnail file missing")
-    return _full_response(media.thumbnail_path, os.path.getsize(media.thumbnail_path), "image/webp")
+    return _full_response(media.thumbnail_path, os.path.getsize(media.thumbnail_path), "image/jpeg")
 
 
 @router.get("/feed", response_model=FeedResponse)

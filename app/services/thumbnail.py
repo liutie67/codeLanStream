@@ -71,7 +71,7 @@ def generate_thumbnail(
 ) -> str | None:
     """为视频生成封面，返回封面路径或 None。"""
     strat = strategy or DEFAULT_STRATEGY
-    output_path = THUMBNAIL_DIR / f"{media_id}.webp"
+    output_path = THUMBNAIL_DIR / f"{media_id}.jpg"
     if output_path.exists():
         return str(output_path)
     if strat.generate(video_path, output_path):
