@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+.masonry {
+  column-count: 3;
+  column-gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .masonry {
+    column-count: 2;
+  }
+}
+
+.masonry-item {
+  break-inside: avoid;
+  margin-bottom: 12px;
+}
