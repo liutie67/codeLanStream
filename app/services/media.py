@@ -1,7 +1,8 @@
 import os
+import shutil
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import delete as sql_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -135,3 +136,72 @@ def get_mime_type(file_path: str) -> str:
         ".gif": "image/gif",
     }
     return mime_map.get(ext, "application/octet-stream")
+
+
+async def toggle_favorite(db: AsyncSession, media_id: str) -> MediaOut:
+    media = await get_media(db, media_id)
+    if not media:
+        raise ValueError("Media not found")
+    media.is_favorited = not media.is_favorited
+    await db.commit()
+    await db.refresh(media)
+    return MediaOut.model_validate(media)
+
+
+async def toggle_deleted(db: AsyncSession, media_id: str) -> MediaOut:
+    media = await get_media(db, media_id)
+    if not media:
+        raise ValueError("Media not found")
+    media.is_deleted = not media.is_deleted
+    await db.commit()
+    await db.refresh(media)
+    return MediaOut.model_validate(media)
+
+
+async def purge_deleted(db: AsyncSession) -> int:
+    result = await db.execute(select(Media).where(Media.is_deleted == True))
+    items = result.scalars().all()
+    count = 0
+    for media in items:
+        if media.file_path and os.path.exists(media.file_path):
+            os.remove(media.file_path)
+        if media.thumbnail_path and os.path.exists(media.thumbnail_path):
+            os.remove(media.thumbnail_path)
+        await db.delete(media)
+        count += 1
+    await db.commit()
+    return count
+
+
+async def export_favorites(db: AsyncSession, target_dir: str) -> int:
+    result = await db.execute(select(Media).where(Media.is_favorited == True))
+    items = result.scalars().all()
+    Path(target_dir).mkdir(parents=True, exist_ok=True)
+    count = 0
+    for media in items:
+        if media.file_path and os.path.exists(media.file_path):
+            dest = Path(target_dir) / Path(media.file_path).name
+            shutil.copy2(media.file_path, dest)
+            count += 1
+    return count
+
+
+async def batch_update(db: AsyncSession, ids: list[str], action: str) -> int:
+    count = 0
+    for mid in ids:
+        media = await get_media(db, mid)
+        if not media:
+            continue
+        if action == "favorite":
+            media.is_favorited = True
+        elif action == "unfavorite":
+            media.is_favorited = False
+        elif action == "delete":
+            media.is_deleted = True
+        elif action == "undelete":
+            media.is_deleted = False
+        else:
+            continue
+        count += 1
+    await db.commit()
+    return count

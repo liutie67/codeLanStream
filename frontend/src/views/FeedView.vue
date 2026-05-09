@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
 import { useFeed } from '../composables/useFeed'
 import TypeFilter from '../components/TypeFilter.vue'
@@ -27,6 +28,11 @@ const colIcon = () => {
   return map[colMode.value]
 }
 
+function onItemUpdated(updated: MediaItem) {
+  const idx = items.value.findIndex(i => i.id === updated.id)
+  if (idx !== -1) items.value[idx] = updated
+}
+
 function onScroll() {
   if (loading.value || !hasMore.value) return
   const bottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY
@@ -41,7 +47,15 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   <div class="min-h-screen bg-gray-950 text-white">
     <header class="sticky top-0 z-40 bg-gray-950/90 backdrop-blur border-b border-gray-800">
       <div class="max-w-6xl mx-auto px-3 py-2 flex items-center justify-between gap-2">
-        <h1 class="text-lg font-bold tracking-tight shrink-0">LanStream</h1>
+        <div class="flex items-center gap-3">
+          <h1 class="text-lg font-bold tracking-tight shrink-0">LanStream</h1>
+          <RouterLink
+            to="/manage"
+            class="hidden md:inline text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            管理
+          </RouterLink>
+        </div>
         <div class="flex items-center gap-2">
           <span class="text-xs text-gray-500 tabular-nums">{{ total }}</span>
           <button
@@ -63,6 +77,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
           :key="item.id"
           :item="item"
           @click="activeItem = $event"
+          @updated="onItemUpdated"
         />
       </div>
 

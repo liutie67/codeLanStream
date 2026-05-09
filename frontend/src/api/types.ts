@@ -10,6 +10,8 @@ export interface MediaItem {
   height: number | null
   folder: string | null
   thumbnail_path: string | null
+  is_favorited: boolean
+  is_deleted: boolean
   created_at: string
 }
 

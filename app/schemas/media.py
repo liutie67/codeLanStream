@@ -15,6 +15,8 @@ class MediaOut(BaseModel):
     height: int | None
     folder: str | None
     thumbnail_path: str | None
+    is_favorited: bool
+    is_deleted: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

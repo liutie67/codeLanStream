@@ -30,3 +30,36 @@ export function getStreamUrl(mediaId: string): string {
 export function getThumbnailUrl(mediaId: string): string {
   return `${API_BASE}/thumbnail/${mediaId}`
 }
+
+export async function toggleFavorite(id: string): Promise<MediaItem> {
+  const res = await fetch(`${API_BASE}/${id}/favorite`, { method: 'POST' })
+  return res.json()
+}
+
+export async function toggleDelete(id: string): Promise<MediaItem> {
+  const res = await fetch(`${API_BASE}/${id}/delete`, { method: 'POST' })
+  return res.json()
+}
+
+export async function purgeDeleted(): Promise<{ deleted_count: number }> {
+  const res = await fetch(`${API_BASE}/manage/purge`, { method: 'POST' })
+  return res.json()
+}
+
+export async function exportFavorites(targetDir: string): Promise<{ exported_count: number }> {
+  const res = await fetch(`${API_BASE}/manage/export-favorites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_dir: targetDir }),
+  })
+  return res.json()
+}
+
+export async function batchUpdate(ids: string[], action: string): Promise<{ updated_count: number }> {
+  const res = await fetch(`${API_BASE}/manage/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, action }),
+  })
+  return res.json()
+}

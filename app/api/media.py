@@ -2,12 +2,16 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.media import MediaType
 from app.schemas.media import FeedResponse
-from app.services.media import get_feed, get_media, get_mime_type, parse_range
+from app.services.media import (
+    batch_update, export_favorites, get_feed, get_media, get_mime_type,
+    parse_range, purge_deleted, toggle_deleted, toggle_favorite,
+)
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
@@ -122,3 +126,48 @@ def _full_response(file_path: str, file_size: int, mime_type: str) -> StreamingR
             "Accept-Ranges": "bytes",
         },
     )
+
+
+# --- 收藏 / 删除 / 管理 ---
+
+@router.post("/{media_id}/favorite")
+async def favorite(media_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        return await toggle_favorite(db, media_id)
+    except ValueError:
+        raise HTTPException(404, "Media not found")
+
+
+@router.post("/{media_id}/delete")
+async def mark_deleted(media_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        return await toggle_deleted(db, media_id)
+    except ValueError:
+        raise HTTPException(404, "Media not found")
+
+
+class ExportRequest(BaseModel):
+    target_dir: str
+
+
+class BatchRequest(BaseModel):
+    ids: list[str]
+    action: str  # favorite, unfavorite, delete, undelete
+
+
+@router.post("/manage/purge")
+async def purge(db: AsyncSession = Depends(get_db)):
+    count = await purge_deleted(db)
+    return {"deleted_count": count}
+
+
+@router.post("/manage/export-favorites")
+async def export_fav(body: ExportRequest, db: AsyncSession = Depends(get_db)):
+    count = await export_favorites(db, body.target_dir)
+    return {"exported_count": count}
+
+
+@router.post("/manage/batch")
+async def batch(body: BatchRequest, db: AsyncSession = Depends(get_db)):
+    count = await batch_update(db, body.ids, body.action)
+    return {"updated_count": count}
