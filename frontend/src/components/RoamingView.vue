@@ -20,6 +20,8 @@ const phase = ref<'idle' | 'dragging' | 'animating'>('idle')
 const offsetY = ref(0)
 const offsetX = ref(0)
 const videoEl = ref<HTMLVideoElement | null>(null)
+const isMuted = ref(true)
+const userVolume = ref(0)
 
 const current = computed(() => items.value[currentIndex.value])
 const prevItem = computed(() => currentIndex.value > 0 ? items.value[currentIndex.value - 1] : null)
@@ -142,14 +144,22 @@ const feedbackColor = computed(() => {
 
 const feedbackOpacity = computed(() => Math.min(0.5, Math.abs(offsetX.value) / 200))
 
-// Video auto-play
+// Video auto-play + volume persistence
 watch(current, async () => {
   await nextTick()
   if (videoEl.value) {
+    videoEl.value.muted = isMuted.value
+    videoEl.value.volume = userVolume.value
     try { await videoEl.value.play() } catch { /* autoplay blocked */ }
   }
   if (currentIndex.value >= items.value.length - 5) loadMore()
 })
+
+function onVolumeChange() {
+  if (!videoEl.value) return
+  isMuted.value = videoEl.value.muted
+  userVolume.value = videoEl.value.volume
+}
 
 // Keyboard
 function onKeydown(e: KeyboardEvent) {
@@ -233,6 +243,7 @@ onUnmounted(() => {
           playsinline
           controls
           class="max-w-full max-h-full rounded-lg"
+          @volumechange="onVolumeChange"
         />
       </div>
 
