@@ -22,6 +22,7 @@ const offsetX = ref(0)
 const videoEl = ref<HTMLVideoElement | null>(null)
 const isMuted = ref(true)
 const userVolume = ref(0)
+const lastAction = ref<{ itemId: string; action: 'favorite' | 'delete' } | null>(null)
 
 const current = computed(() => items.value[currentIndex.value])
 const prevItem = computed(() => currentIndex.value > 0 ? items.value[currentIndex.value - 1] : null)
@@ -42,7 +43,7 @@ const { attach, detach } = useSwipe(containerRef, {
     phase.value = 'animating'
     offsetY.value = 0
     offsetX.value = 0
-    setTimeout(() => { phase.value = 'idle' }, 300)
+    setTimeout(() => { phase.value = 'idle' }, 200)
   },
   threshold: 100,
 })
@@ -53,50 +54,57 @@ async function handleSwipe(direction: SwipeDirection) {
   phase.value = 'animating'
 
   const vh = window.innerHeight
+  const dur = 200
 
   if (direction === 'up') {
+    // Confirm last action (no longer undoable)
+    lastAction.value = null
     if (currentIndex.value >= items.value.length - 1) {
       if (hasMore.value) await loadMore()
       if (currentIndex.value >= items.value.length - 1) {
-        // No next item, snap back
-        phase.value = 'animating'
         offsetY.value = 0
-        setTimeout(() => { phase.value = 'idle'; isLocked.value = false }, 300)
+        setTimeout(() => { phase.value = 'idle'; isLocked.value = false }, dur)
         return
       }
     }
-    // Animate current up, next slides in from below
     offsetY.value = -vh
   } else if (direction === 'down') {
     if (currentIndex.value <= 0) {
-      phase.value = 'animating'
       offsetY.value = 0
-      setTimeout(() => { phase.value = 'idle'; isLocked.value = false }, 300)
+      setTimeout(() => { phase.value = 'idle'; isLocked.value = false }, dur)
       return
+    }
+    // Undo last action when going back
+    if (lastAction.value) {
+      const { itemId, action } = lastAction.value
+      lastAction.value = null
+      const undoFn = action === 'favorite' ? toggleFavorite : toggleDelete
+      undoFn(itemId).then(updated => {
+        const idx = items.value.findIndex(i => i.id === updated.id)
+        if (idx !== -1) items.value[idx] = updated
+      }).catch(() => {})
     }
     offsetY.value = vh
   } else if (direction === 'right' || direction === 'left') {
-    // Horizontal: animate off screen
+    // Fire action immediately, don't await
+    if (direction === 'right' && current.value) {
+      lastAction.value = { itemId: current.value.id, action: 'favorite' }
+      toggleFavorite(current.value.id).then(updated => {
+        const idx = items.value.findIndex(i => i.id === updated.id)
+        if (idx !== -1) items.value[idx] = updated
+      }).catch(() => {})
+    } else if (direction === 'left' && current.value) {
+      lastAction.value = { itemId: current.value.id, action: 'delete' }
+      toggleDelete(current.value.id).then(updated => {
+        const idx = items.value.findIndex(i => i.id === updated.id)
+        if (idx !== -1) items.value[idx] = updated
+      }).catch(() => {})
+    }
     offsetX.value = direction === 'right' ? vh : -vh
   }
 
-  // Wait for animation to complete
-  await new Promise(r => setTimeout(r, 300))
-
-  // Fire API call for horizontal actions
-  if (direction === 'right' && current.value) {
-    try {
-      const updated = await toggleFavorite(current.value.id)
-      const idx = items.value.findIndex(i => i.id === updated.id)
-      if (idx !== -1) items.value[idx] = updated
-    } catch { /* ignore */ }
-  } else if (direction === 'left' && current.value) {
-    try {
-      const updated = await toggleDelete(current.value.id)
-      const idx = items.value.findIndex(i => i.id === updated.id)
-      if (idx !== -1) items.value[idx] = updated
-    } catch { /* ignore */ }
-  }
+  // Wait for slide animation
+  await new Promise(r => setTimeout(r, dur))
 
   // Advance index (disable transition to avoid re-animation)
   phase.value = 'dragging'
@@ -201,7 +209,7 @@ onUnmounted(() => {
         class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
         :style="{
           transform: `translateY(calc(-100% + ${offsetY}px))`,
-          transition: hasTransition ? 'transform 300ms ease-out' : 'none',
+          transition: hasTransition ? 'transform 200ms ease-out' : 'none',
         }"
       >
         <img
@@ -225,7 +233,7 @@ onUnmounted(() => {
         class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
         :style="{
           transform: `translate(${offsetX}px, ${offsetY}px)`,
-          transition: hasTransition ? 'transform 300ms ease-out' : 'none',
+          transition: hasTransition ? 'transform 200ms ease-out' : 'none',
         }"
       >
         <img
@@ -253,7 +261,7 @@ onUnmounted(() => {
         class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
         :style="{
           transform: `translateY(calc(100% + ${offsetY}px))`,
-          transition: hasTransition ? 'transform 300ms ease-out' : 'none',
+          transition: hasTransition ? 'transform 200ms ease-out' : 'none',
         }"
       >
         <img
