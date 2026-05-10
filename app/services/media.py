@@ -151,14 +151,15 @@ async def browse_folders(
     items = [MediaOut.model_validate(m) for m in direct_result.scalars().all()]
 
     # Find immediate subdirectories
-    prefix = target_dir + "/"
+    sep = os.sep
+    prefix = target_dir + sep
     sub_result = await db.execute(
         select(Media.folder)
         .where(Media.root_dir == root_dir, Media.folder.startswith(prefix))
         .distinct()
     )
     subdirs = sorted({
-        folder[len(prefix):].split("/")[0]
+        folder[len(prefix):].split(sep)[0]
         for (folder,) in sub_result.all()
     })
 
