@@ -26,6 +26,12 @@ async def scan_directory(dir_path: str, db: AsyncSession) -> int:
     for file in path.rglob("*"):
         if not file.is_file():
             continue
+        # Skip hidden files and files in hidden directories
+        if any(part.startswith('.') for part in file.relative_to(path).parts):
+            continue
+        # Skip common system files
+        if file.name in ('Thumbs.db', 'desktop.ini', 'Desktop.ini'):
+            continue
         media_type = _classify_media(file.suffix)
         if media_type is None:
             continue

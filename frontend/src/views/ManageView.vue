@@ -3,9 +3,11 @@ import { ref, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
 import { fetchFeed, getThumbnailUrl, getStreamUrl, purgeDeleted, exportFavorites, batchUpdate, toggleFavorite, toggleDelete } from '../api/client'
+import { useTheme } from '../composables/useTheme'
 
 type FilterMode = 'all' | 'favorited' | 'deleted'
 
+const { isDark } = useTheme()
 const allItems = ref<MediaItem[]>([])
 const filter = ref<FilterMode>('all')
 const selected = ref<Set<string>>(new Set())
@@ -88,15 +90,15 @@ onMounted(loadAll)
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-white hidden md:block">
+  <div :class="['min-h-screen hidden md:block', isDark ? 'bg-gray-950 text-white' : 'bg-gray-50 text-gray-900']">
     <!-- 移动端提示 -->
     <div class="block md:hidden p-8 text-center text-gray-500">
       管理功能仅支持桌面端
     </div>
 
     <!-- 桌面端内容 -->
-    <header class="sticky top-0 z-40 bg-gray-950/90 backdrop-blur border-b border-gray-800">
-      <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <header :class="['sticky top-0 z-40 backdrop-blur border-b', isDark ? 'bg-gray-950/90 border-gray-800' : 'bg-white/90 border-gray-200']">
+      <div class="px-4 lg:px-6 py-3 flex items-center justify-between">
         <div class="flex items-center gap-4">
           <RouterLink to="/" class="text-lg font-bold tracking-tight hover:text-gray-300 transition-colors">LanStream</RouterLink>
           <span class="text-sm text-gray-500">管理</span>
@@ -105,9 +107,9 @@ onMounted(loadAll)
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-4 py-6">
+    <main class="px-4 lg:px-6 py-6">
       <!-- 消息提示 -->
-      <div v-if="message" class="mb-4 px-4 py-2 bg-gray-800 rounded-lg text-sm text-center">{{ message }}</div>
+      <div v-if="message" :class="['mb-4 px-4 py-2 rounded-lg text-sm text-center', isDark ? 'bg-gray-800' : 'bg-gray-200']">{{ message }}</div>
 
       <!-- 操作栏 -->
       <div class="flex flex-wrap items-center gap-3 mb-6">
@@ -121,7 +123,7 @@ onMounted(loadAll)
           <input
             v-model="exportDir"
             placeholder="导出收藏到目录..."
-            class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 w-64"
+            :class="['px-3 py-2 border rounded-lg text-sm placeholder-gray-500 w-64', isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900']"
           />
           <button
             @click="doExport"
@@ -141,7 +143,7 @@ onMounted(loadAll)
             @click="filter = f"
             :class="[
               'px-3 py-1 rounded-full text-xs font-medium transition-colors',
-              filter === f ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200',
+              filter === f ? 'bg-blue-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
             ]"
           >
             {{ f === 'all' ? `全部 (${allItems.length})` : f === 'favorited' ? `已收藏 (${favoritedCount()})` : `已删除 (${deletedCount()})` }}
@@ -152,20 +154,20 @@ onMounted(loadAll)
             {{ selected.size === filteredItems().length && filteredItems().length > 0 ? '取消全选' : '全选' }}
           </button>
           <button @click="doBatch('favorite')" class="px-3 py-1 bg-pink-600/20 text-pink-400 rounded text-xs hover:bg-pink-600/30">批量收藏</button>
-          <button @click="doBatch('delete')" class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600">批量删除</button>
-          <button @click="doBatch('unfavorite')" class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600">取消收藏</button>
-          <button @click="doBatch('undelete')" class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-xs hover:bg-gray-600">取消删除</button>
+          <button @click="doBatch('delete')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">批量删除</button>
+          <button @click="doBatch('unfavorite')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">取消收藏</button>
+          <button @click="doBatch('undelete')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">取消删除</button>
         </div>
       </div>
 
       <!-- 列表 -->
       <div v-if="loading" class="py-12 text-center text-gray-500">加载中...</div>
       <div v-else-if="filteredItems().length === 0" class="py-12 text-center text-gray-500">暂无数据</div>
-      <div v-else class="border border-gray-800 rounded-xl overflow-hidden">
+      <div v-else :class="['border rounded-xl overflow-hidden', isDark ? 'border-gray-800' : 'border-gray-200']">
         <div
           v-for="(item, idx) in filteredItems()"
           :key="item.id"
-          :class="['flex items-center gap-4 px-4 py-3 hover:bg-gray-900/50 transition-colors', idx > 0 ? 'border-t border-gray-800' : '']"
+          :class="['flex items-center gap-4 px-4 py-3 transition-colors', isDark ? 'hover:bg-gray-900/50' : 'hover:bg-gray-100', idx > 0 ? (isDark ? 'border-t border-gray-800' : 'border-t border-gray-200') : '']"
         >
           <input
             type="checkbox"

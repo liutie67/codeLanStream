@@ -3,11 +3,13 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
 import { useFeed } from '../composables/useFeed'
+import { useTheme } from '../composables/useTheme'
 import TypeFilter from '../components/TypeFilter.vue'
 import MediaCard from '../components/MediaCard.vue'
 import VideoPlayer from '../components/VideoPlayer.vue'
 
 const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
+const { isDark, toggleTheme } = useTheme()
 const activeItem = ref<MediaItem | null>(null)
 const colMode = ref<'auto' | '1' | '2'>('auto')
 
@@ -44,9 +46,9 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-white">
-    <header class="sticky top-0 z-40 bg-gray-950/90 backdrop-blur border-b border-gray-800">
-      <div class="max-w-6xl mx-auto px-3 py-2 flex items-center justify-between gap-2">
+  <div :class="['min-h-screen', isDark ? 'bg-gray-950 text-white' : 'bg-gray-50 text-gray-900']">
+    <header :class="['sticky top-0 z-40 backdrop-blur border-b', isDark ? 'bg-gray-950/90 border-gray-800' : 'bg-white/90 border-gray-200']">
+      <div class="px-4 lg:px-6 py-2 flex items-center justify-between gap-2">
         <div class="flex items-center gap-3">
           <h1 class="text-lg font-bold tracking-tight shrink-0">LanStream</h1>
           <RouterLink
@@ -59,8 +61,20 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
         <div class="flex items-center gap-2">
           <span class="text-xs text-gray-500 tabular-nums">{{ total }}</span>
           <button
+            @click="toggleTheme"
+            :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-yellow-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
+            :title="isDark ? '浅色模式' : '深色模式'"
+          >
+            <svg v-if="isDark" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+            </svg>
+            <svg v-else class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M21.64 13a9 9 0 11-9-9 7 7 0 009 9z"/>
+            </svg>
+          </button>
+          <button
             @click="cycleColMode"
-            class="w-7 h-7 flex items-center justify-center rounded-full bg-gray-800 text-gray-400 text-sm hover:bg-gray-700 transition-colors shrink-0"
+            :class="['w-7 h-7 flex items-center justify-center rounded-full text-sm transition-colors shrink-0', isDark ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
             :title="colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列'"
           >
             {{ colIcon() }}
@@ -70,7 +84,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-3 py-4">
+    <main class="px-4 lg:px-6 py-4">
       <div :class="getColClass()">
         <MediaCard
           v-for="item in items"

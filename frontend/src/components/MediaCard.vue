@@ -1,9 +1,17 @@
 <script setup lang="ts">
 import type { MediaItem } from '../api/types'
 import { getStreamUrl, getThumbnailUrl, toggleFavorite, toggleDelete } from '../api/client'
+import { useTheme } from '../composables/useTheme'
 
 const props = defineProps<{ item: MediaItem }>()
 const emit = defineEmits<{ click: [item: MediaItem]; updated: [item: MediaItem] }>()
+const { isDark } = useTheme()
+
+function btnInactive() {
+  return isDark.value
+    ? 'bg-black/30 border-white/50 text-white/70 hover:border-white hover:text-white'
+    : 'bg-white/70 border-gray-400/50 text-gray-500 hover:border-gray-600 hover:text-gray-700'
+}
 
 async function onFavorite(e: MouseEvent) {
   e.stopPropagation()
@@ -20,7 +28,7 @@ async function onDelete(e: MouseEvent) {
 
 <template>
   <div
-    class="masonry-item rounded-xl overflow-hidden bg-gray-900 cursor-pointer group relative"
+    :class="['masonry-item rounded-xl overflow-hidden cursor-pointer group relative', isDark ? 'bg-gray-900' : 'bg-gray-100']"
     @click="emit('click', item)"
   >
     <img
@@ -59,8 +67,8 @@ async function onDelete(e: MouseEvent) {
         :class="[
           'w-7 h-7 flex items-center justify-center rounded-full border transition-colors',
           item.is_deleted
-            ? 'bg-black/80 border-black text-white'
-            : 'bg-black/30 border-white/50 text-white/70 hover:border-white hover:text-white',
+            ? 'bg-red-500/80 border-red-400 text-white'
+            : btnInactive(),
         ]"
       >
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -72,8 +80,8 @@ async function onDelete(e: MouseEvent) {
         :class="[
           'w-7 h-7 flex items-center justify-center rounded-full border transition-colors',
           item.is_favorited
-            ? 'bg-pink-500/80 border-pink-400 text-white'
-            : 'bg-black/30 border-white/50 text-white/70 hover:border-white hover:text-white',
+            ? 'bg-yellow-400/80 border-yellow-300 text-white'
+            : btnInactive(),
         ]"
       >
         <svg class="w-3.5 h-3.5" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

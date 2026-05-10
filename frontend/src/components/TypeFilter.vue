@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import type { MediaType } from '../api/types'
+import { useTheme } from '../composables/useTheme'
+
+const { isDark } = useTheme()
 
 defineProps<{ current: MediaType | null }>()
 const emit = defineEmits<{
@@ -15,7 +18,7 @@ const filters: FilterOption[] = [
 </script>
 
 <template>
-  <div class="flex rounded-full bg-gray-800 p-0.5">
+  <div :class="['flex rounded-full p-0.5', isDark ? 'bg-gray-800' : 'bg-gray-200']">
     <button
       v-for="f in filters"
       :key="f.label"
@@ -25,7 +28,7 @@ const filters: FilterOption[] = [
         'md:px-3 md:text-xs',
         current === f.value
           ? 'bg-blue-600 text-white shadow-sm'
-          : 'text-gray-400 hover:text-gray-200',
+          : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
       ]"
     >
       <span class="md:hidden">{{ f.short }}</span>
