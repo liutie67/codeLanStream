@@ -9,8 +9,9 @@ from app.core.database import get_db
 from app.models.media import MediaType
 from app.schemas.media import FeedResponse
 from app.services.media import (
-    batch_update, export_favorites, get_feed, get_media, get_mime_type,
-    parse_range, purge_deleted, toggle_deleted, toggle_favorite,
+    batch_update, browse_folders, export_favorites, get_feed, get_media,
+    get_mime_type, get_random_media, parse_range, purge_deleted,
+    toggle_deleted, toggle_favorite,
 )
 
 router = APIRouter(prefix="/api/media", tags=["media"])
@@ -44,18 +45,23 @@ async def feed(
 
 @router.get("/random")
 async def random_media(
-    count: int = 10,
+    count: int = 50,
+    exclude_ids: str = "",
+    media_type: MediaType | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    from sqlalchemy import text
-    from app.schemas.media import MediaOut
+    ids = [x.strip() for x in exclude_ids.split(",") if x.strip()] or None
+    return await get_random_media(db, count, ids, media_type)
 
-    result = await db.execute(
-        text("SELECT * FROM media ORDER BY RANDOM() LIMIT :limit"),
-        {"limit": count},
-    )
-    rows = result.mappings().all()
-    return [MediaOut.model_validate(row) for row in rows]
+
+@router.get("/browse")
+async def browse(
+    root_dir: str | None = None,
+    subdir: str | None = None,
+    media_type: MediaType | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    return await browse_folders(db, root_dir, subdir, media_type)
 
 
 @router.get("/stream/{media_id}")

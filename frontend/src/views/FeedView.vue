@@ -7,10 +7,12 @@ import { useTheme } from '../composables/useTheme'
 import TypeFilter from '../components/TypeFilter.vue'
 import MediaCard from '../components/MediaCard.vue'
 import VideoPlayer from '../components/VideoPlayer.vue'
+import FolderBrowser from '../components/FolderBrowser.vue'
 
 const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
 const activeItem = ref<MediaItem | null>(null)
+const showFolders = ref(false)
 const colMode = ref<'auto' | '1' | '2'>('auto')
 
 function getColClass() {
@@ -61,6 +63,15 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
         <div class="flex items-center gap-2">
           <span class="text-xs text-gray-500 tabular-nums">{{ total }}</span>
           <button
+            @click="showFolders = true"
+            :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-yellow-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
+            title="浏览文件夹"
+          >
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/>
+            </svg>
+          </button>
+          <button
             @click="toggleTheme"
             :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-yellow-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
             :title="isDark ? '浅色模式' : '深色模式'"
@@ -101,6 +112,11 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
       <p v-else-if="!hasMore && items.length" class="py-8 text-center text-gray-500 text-sm">已加载全部</p>
     </main>
 
+    <FolderBrowser
+      v-if="showFolders"
+      @close="showFolders = false"
+      @play="activeItem = $event"
+    />
     <VideoPlayer
       v-if="activeItem"
       :item="activeItem"

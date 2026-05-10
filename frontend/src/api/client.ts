@@ -1,4 +1,4 @@
-import type { FeedResponse, MediaItem } from './types'
+import type { BrowseResponse, FeedResponse, MediaItem, RandomResponse } from './types'
 
 const API_BASE = '/api/media'
 
@@ -18,8 +18,25 @@ export async function fetchFeed(params: {
   return res.json()
 }
 
-export async function fetchRandom(count: number = 10): Promise<MediaItem[]> {
-  const res = await fetch(`${API_BASE}/random?count=${count}`)
+export async function fetchRandom(
+  count: number = 50,
+  excludeIds: string[] = [],
+  mediaType?: string | null,
+): Promise<RandomResponse> {
+  const search = new URLSearchParams()
+  search.set('count', String(count))
+  if (excludeIds.length > 0) search.set('exclude_ids', excludeIds.join(','))
+  if (mediaType) search.set('media_type', mediaType)
+  const res = await fetch(`${API_BASE}/random?${search}`)
+  return res.json()
+}
+
+export async function fetchBrowse(rootDir?: string, subdir?: string, mediaType?: string | null): Promise<BrowseResponse> {
+  const search = new URLSearchParams()
+  if (rootDir) search.set('root_dir', rootDir)
+  if (subdir) search.set('subdir', subdir)
+  if (mediaType) search.set('media_type', mediaType)
+  const res = await fetch(`${API_BASE}/browse?${search}`)
   return res.json()
 }
 

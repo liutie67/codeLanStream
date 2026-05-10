@@ -22,7 +22,8 @@ def _classify_media(ext: str) -> MediaType | None:
 
 async def scan_directory(dir_path: str, db: AsyncSession) -> int:
     count = 0
-    path = Path(dir_path)
+    path = Path(dir_path).resolve()
+    root = str(path)
     for file in path.rglob("*"):
         if not file.is_file():
             continue
@@ -48,6 +49,7 @@ async def scan_directory(dir_path: str, db: AsyncSession) -> int:
             media_type=media_type,
             size_bytes=stat.st_size,
             folder=str(file.parent),
+            root_dir=root,
         )
         db.add(media)
         await db.flush()
@@ -92,6 +94,75 @@ async def get_feed(
         page_size=page_size,
         has_next=has_next,
     )
+
+
+async def get_random_media(
+    db: AsyncSession,
+    count: int = 50,
+    exclude_ids: list[str] | None = None,
+    media_type: MediaType | None = None,
+) -> dict:
+    query = select(Media)
+    count_query = select(func.count(Media.id))
+
+    if media_type:
+        query = query.where(Media.media_type == media_type)
+        count_query = count_query.where(Media.media_type == media_type)
+
+    if exclude_ids:
+        query = query.where(Media.id.notin_(exclude_ids))
+
+    query = query.order_by(func.random()).limit(count)
+
+    result = await db.execute(query)
+    items = [MediaOut.model_validate(m) for m in result.scalars().all()]
+
+    total = (await db.execute(count_query)).scalar_one()
+
+    return {"items": items, "total": total}
+
+
+async def browse_folders(
+    db: AsyncSession,
+    root_dir: str | None = None,
+    subdir: str | None = None,
+    media_type: MediaType | None = None,
+) -> dict:
+    if root_dir is None:
+        result = await db.execute(
+            select(Media.root_dir, func.count(Media.id))
+            .where(Media.root_dir.isnot(None))
+            .group_by(Media.root_dir)
+        )
+        roots = [
+            {"path": r, "name": Path(r).name, "count": c}
+            for r, c in result.all()
+        ]
+        return {"roots": roots, "folders": [], "items": []}
+
+    target_dir = str(Path(root_dir) / subdir) if subdir else root_dir
+
+    # Media directly in this directory, sorted by filename
+    query = select(Media).where(Media.folder == target_dir)
+    if media_type:
+        query = query.where(Media.media_type == media_type)
+    query = query.order_by(Media.file_path)
+    direct_result = await db.execute(query)
+    items = [MediaOut.model_validate(m) for m in direct_result.scalars().all()]
+
+    # Find immediate subdirectories
+    prefix = target_dir + "/"
+    sub_result = await db.execute(
+        select(Media.folder)
+        .where(Media.root_dir == root_dir, Media.folder.startswith(prefix))
+        .distinct()
+    )
+    subdirs = sorted({
+        folder[len(prefix):].split("/")[0]
+        for (folder,) in sub_result.all()
+    })
+
+    return {"roots": [], "folders": subdirs, "items": items}
 
 
 async def get_media(db: AsyncSession, media_id: str) -> Media | None:

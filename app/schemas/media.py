@@ -14,6 +14,7 @@ class MediaOut(BaseModel):
     width: int | None
     height: int | None
     folder: str | None
+    root_dir: str | None
     thumbnail_path: str | None
     is_favorited: bool
     is_deleted: bool

@@ -9,6 +9,7 @@ export interface MediaItem {
   width: number | null
   height: number | null
   folder: string | null
+  root_dir: string | null
   thumbnail_path: string | null
   is_favorited: boolean
   is_deleted: boolean
@@ -21,4 +22,21 @@ export interface FeedResponse {
   page: number
   page_size: number
   has_next: boolean
+}
+
+export interface RandomResponse {
+  items: MediaItem[]
+  total: number
+}
+
+export interface BrowseRoot {
+  path: string
+  name: string
+  count: number
+}
+
+export interface BrowseResponse {
+  roots: BrowseRoot[]
+  folders: string[]
+  items: MediaItem[]
 }
