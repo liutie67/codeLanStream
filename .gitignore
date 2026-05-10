@@ -1,2 +1,10 @@
 .idea/
 .DS_Store
+.venv/
+__pycache__/
+*.pyc
+data/
+frontend/node_modules/
+frontend/dist/
+test_media/
+
