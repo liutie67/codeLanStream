@@ -67,6 +67,8 @@ async def get_feed(
     page_size: int = settings.feed_page_size,
     media_type: MediaType | None = None,
     folder: str | None = None,
+    is_favorited: bool | None = None,
+    is_deleted: bool | None = None,
 ) -> FeedResponse:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -77,6 +79,12 @@ async def get_feed(
     if folder:
         query = query.where(Media.folder.contains(folder))
         count_query = count_query.where(Media.folder.contains(folder))
+    if is_favorited is not None:
+        query = query.where(Media.is_favorited == is_favorited)
+        count_query = count_query.where(Media.is_favorited == is_favorited)
+    if is_deleted is not None:
+        query = query.where(Media.is_deleted == is_deleted)
+        count_query = count_query.where(Media.is_deleted == is_deleted)
 
     total = (await db.execute(count_query)).scalar_one()
     offset = (page - 1) * page_size

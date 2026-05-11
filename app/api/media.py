@@ -38,9 +38,11 @@ async def feed(
     page_size: int = 20,
     media_type: MediaType | None = None,
     folder: str | None = None,
+    is_favorited: bool | None = None,
+    is_deleted: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_feed(db, page, page_size, media_type, folder)
+    return await get_feed(db, page, page_size, media_type, folder, is_favorited, is_deleted)
 
 
 @router.get("/random")

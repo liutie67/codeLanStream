@@ -7,12 +7,16 @@ export async function fetchFeed(params: {
   page_size?: number
   media_type?: string
   folder?: string
+  is_favorited?: boolean
+  is_deleted?: boolean
 }): Promise<FeedResponse> {
   const search = new URLSearchParams()
   if (params.page) search.set('page', String(params.page))
   if (params.page_size) search.set('page_size', String(params.page_size))
   if (params.media_type) search.set('media_type', params.media_type)
   if (params.folder) search.set('folder', params.folder)
+  if (params.is_favorited !== undefined) search.set('is_favorited', String(params.is_favorited))
+  if (params.is_deleted !== undefined) search.set('is_deleted', String(params.is_deleted))
 
   const res = await fetch(`${API_BASE}/feed?${search}`)
   return res.json()
