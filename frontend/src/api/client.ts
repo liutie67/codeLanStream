@@ -26,11 +26,15 @@ export async function fetchRandom(
   count: number = 50,
   excludeIds: string[] = [],
   mediaType?: string | null,
+  isFavorited?: boolean | null,
+  isDeleted?: boolean | null,
 ): Promise<RandomResponse> {
   const search = new URLSearchParams()
   search.set('count', String(count))
   if (excludeIds.length > 0) search.set('exclude_ids', excludeIds.join(','))
   if (mediaType) search.set('media_type', mediaType)
+  if (isFavorited !== undefined && isFavorited !== null) search.set('is_favorited', String(isFavorited))
+  if (isDeleted !== undefined && isDeleted !== null) search.set('is_deleted', String(isDeleted))
   const res = await fetch(`${API_BASE}/random?${search}`)
   return res.json()
 }

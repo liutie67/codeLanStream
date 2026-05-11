@@ -9,12 +9,14 @@ import MediaCard from '../components/MediaCard.vue'
 import VideoPlayer from '../components/VideoPlayer.vue'
 import FolderBrowser from '../components/FolderBrowser.vue'
 import RoamingView from '../components/RoamingView.vue'
+import TurboView from '../components/TurboView.vue'
 
 const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
 const activeItem = ref<MediaItem | null>(null)
 const showFolders = ref(false)
 const showRoaming = ref(false)
+const showTurbo = ref(false)
 const colMode = ref<'auto' | '1' | '2'>('auto')
 
 function getColClass() {
@@ -83,6 +85,16 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
             </svg>
           </button>
           <button
+            v-if="!showTurbo"
+            @click="showTurbo = true"
+            class="hidden md:flex w-7 h-7 items-center justify-center rounded-full bg-gray-800 text-yellow-400 hover:bg-gray-700 transition-colors shrink-0"
+            title="极速模式"
+          >
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+          </button>
+          <button
             @click="toggleTheme"
             :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-yellow-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
             :title="isDark ? '浅色模式' : '深色模式'"
@@ -131,6 +143,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
     <RoamingView
       v-if="showRoaming"
       @close="showRoaming = false"
+    />
+    <TurboView
+      v-if="showTurbo"
+      @close="showTurbo = false"
     />
     <VideoPlayer
       v-if="activeItem"

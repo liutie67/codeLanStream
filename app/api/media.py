@@ -50,10 +50,12 @@ async def random_media(
     count: int = 50,
     exclude_ids: str = "",
     media_type: MediaType | None = None,
+    is_favorited: bool | None = None,
+    is_deleted: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     ids = [x.strip() for x in exclude_ids.split(",") if x.strip()] or None
-    return await get_random_media(db, count, ids, media_type)
+    return await get_random_media(db, count, ids, media_type, is_favorited, is_deleted)
 
 
 @router.get("/browse")

@@ -109,6 +109,8 @@ async def get_random_media(
     count: int = 50,
     exclude_ids: list[str] | None = None,
     media_type: MediaType | None = None,
+    is_favorited: bool | None = None,
+    is_deleted: bool | None = None,
 ) -> dict:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -119,6 +121,13 @@ async def get_random_media(
 
     if exclude_ids:
         query = query.where(Media.id.notin_(exclude_ids))
+
+    if is_favorited is not None:
+        query = query.where(Media.is_favorited == is_favorited)
+        count_query = count_query.where(Media.is_favorited == is_favorited)
+    if is_deleted is not None:
+        query = query.where(Media.is_deleted == is_deleted)
+        count_query = count_query.where(Media.is_deleted == is_deleted)
 
     query = query.order_by(func.random()).limit(count)
 
