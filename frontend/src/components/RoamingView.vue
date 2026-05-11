@@ -100,16 +100,23 @@ async function handleSwipe(direction: SwipeDirection) {
         if (idx !== -1) items.value[idx] = updated
       }).catch(() => {})
     }
-    offsetX.value = direction === 'right' ? vh : -vh
+    // Skip slide animation — switch instantly
+    phase.value = 'dragging'
+    offsetX.value = 0
+    currentIndex.value++
+    await new Promise(r => requestAnimationFrame(r))
+    phase.value = 'idle'
+    isLocked.value = false
+    return
   }
 
-  // Wait for slide animation
+  // Wait for slide animation (up/down only)
   await new Promise(r => setTimeout(r, dur))
 
   // Advance index (disable transition to avoid re-animation)
   phase.value = 'dragging'
   if (direction === 'down') currentIndex.value--
-  else currentIndex.value++ // up, left, right all go forward
+  else currentIndex.value++
 
   // Reset offset instantly (no transition)
   offsetY.value = 0
@@ -295,6 +302,10 @@ onUnmounted(() => {
         <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/>
       </svg>
     </div>
+
+    <!-- Status indicator lines -->
+    <div v-if="current && current.is_deleted" class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 z-20 pointer-events-none" />
+    <div v-if="current && current.is_favorited" class="absolute right-0 top-0 bottom-0 w-1 bg-yellow-500 z-20 pointer-events-none" />
 
     <!-- Bottom info -->
     <div v-if="current" class="absolute bottom-0 inset-x-0 z-10 px-4 pb-4">
