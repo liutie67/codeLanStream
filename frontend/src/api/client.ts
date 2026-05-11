@@ -29,13 +29,17 @@ export async function fetchRandom(
   isFavorited?: boolean | null,
   isDeleted?: boolean | null,
 ): Promise<RandomResponse> {
-  const search = new URLSearchParams()
-  search.set('count', String(count))
-  if (excludeIds.length > 0) search.set('exclude_ids', excludeIds.join(','))
-  if (mediaType) search.set('media_type', mediaType)
-  if (isFavorited !== undefined && isFavorited !== null) search.set('is_favorited', String(isFavorited))
-  if (isDeleted !== undefined && isDeleted !== null) search.set('is_deleted', String(isDeleted))
-  const res = await fetch(`${API_BASE}/random?${search}`)
+  const res = await fetch(`${API_BASE}/random`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      count,
+      exclude_ids: excludeIds,
+      ...(mediaType && { media_type: mediaType }),
+      ...(isFavorited !== undefined && isFavorited !== null && { is_favorited: isFavorited }),
+      ...(isDeleted !== undefined && isDeleted !== null && { is_deleted: isDeleted }),
+    }),
+  })
   return res.json()
 }
 

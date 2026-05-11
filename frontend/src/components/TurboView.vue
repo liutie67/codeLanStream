@@ -33,6 +33,7 @@ async function loadMore() {
     for (const item of res.items) loadedIds.value.add(item.id)
     items.value.push(...res.items)
     if (res.items.length < 50) hasMore.value = false
+    pruneAbove()
   } finally {
     loading.value = false
   }
@@ -130,10 +131,38 @@ function onScroll() {
   if (minBottom < scrollBottom + 600) loadMore()
 }
 
+function pruneAbove() {
+  if (!scrollRef.value) return
+  const containerTop = scrollRef.value.getBoundingClientRect().top
+  const threshold = scrollRef.value.clientHeight * 3
+
+  const toRemoveIds: string[] = []
+  for (const item of items.value) {
+    const el = cardRefs.get(item.id)
+    if (!el) continue
+    const rect = el.getBoundingClientRect()
+    if (rect.bottom < containerTop - threshold) {
+      toRemoveIds.push(item.id)
+    }
+  }
+
+  if (toRemoveIds.length === 0) return
+
+  const removeSet = new Set(toRemoveIds)
+  for (const id of removeSet) {
+    const el = cardRefs.get(id)
+    if (el) {
+      seenObserver?.unobserve(el)
+      scrollObserver?.unobserve(el)
+    }
+    cardRefs.delete(id)
+  }
+
+  items.value = items.value.filter(item => !removeSet.has(item.id))
+}
+
 async function exitTurbo() {
-  const toDelete = items.value
-    .filter(item => scrolledPastIds.value.has(item.id) && !favoriteIds.value.has(item.id))
-    .map(item => item.id)
+  const toDelete = [...scrolledPastIds.value].filter(id => !favoriteIds.value.has(id))
 
   if (toDelete.length === 0) { emit('close'); return }
 

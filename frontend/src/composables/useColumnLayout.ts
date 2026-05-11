@@ -31,8 +31,12 @@ export function useColumnLayout(items: Ref<MediaItem[]>, colCount: Ref<number>) 
   }
 
   watch([() => items.value.length, colCount], ([len], [oldLen]) => {
-    if (columns.value.length !== colCount.value || len < (oldLen ?? 0)) {
+    if (columns.value.length !== colCount.value) {
       distribute()
+    } else if (len < (oldLen ?? 0)) {
+      const remainingIds = new Set(items.value.map(i => i.id))
+      columns.value = columns.value.map(col => col.filter(item => remainingIds.has(item.id)))
+      prevLen = len
     } else if (len > (oldLen ?? 0)) {
       append()
     }

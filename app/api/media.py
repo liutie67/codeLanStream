@@ -45,17 +45,18 @@ async def feed(
     return await get_feed(db, page, page_size, media_type, folder, is_favorited, is_deleted)
 
 
-@router.get("/random")
-async def random_media(
-    count: int = 50,
-    exclude_ids: str = "",
-    media_type: MediaType | None = None,
-    is_favorited: bool | None = None,
-    is_deleted: bool | None = None,
-    db: AsyncSession = Depends(get_db),
-):
-    ids = [x.strip() for x in exclude_ids.split(",") if x.strip()] or None
-    return await get_random_media(db, count, ids, media_type, is_favorited, is_deleted)
+class RandomRequest(BaseModel):
+    count: int = 50
+    exclude_ids: list[str] = []
+    media_type: MediaType | None = None
+    is_favorited: bool | None = None
+    is_deleted: bool | None = None
+
+
+@router.post("/random")
+async def random_media(body: RandomRequest, db: AsyncSession = Depends(get_db)):
+    exclude = body.exclude_ids or None
+    return await get_random_media(db, body.count, exclude, body.media_type, body.is_favorited, body.is_deleted)
 
 
 @router.get("/browse")
