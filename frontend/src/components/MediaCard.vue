@@ -28,7 +28,7 @@ async function onDelete(e: MouseEvent) {
 
 <template>
   <div
-    :class="['masonry-item rounded-xl overflow-hidden cursor-pointer group', isDark ? 'bg-gray-900' : 'bg-gray-100']"
+    :class="['rounded-xl overflow-hidden cursor-pointer group', isDark ? 'bg-gray-900' : 'bg-gray-100']"
     @click="emit('click', item)"
   >
     <div class="relative">

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
 import { fetchRandom, getStreamUrl, getThumbnailUrl, toggleFavorite, batchUpdate } from '../api/client'
+import { useColumnLayout } from '../composables/useColumnLayout'
 import TypeFilter from './TypeFilter.vue'
 
 const emit = defineEmits<{ close: [] }>()
@@ -14,9 +15,12 @@ const hasMore = ref(true)
 const favoriteIds = ref<Set<string>>(new Set())
 const scrolledPastIds = ref<Set<string>>(new Set())
 const previewItem = ref<MediaItem | null>(null)
-const colMode = ref<3 | 5 | 6>(5)
+const colMode = ref(5)
 const scrollRef = ref<HTMLElement>()
 const cardRefs = new Map<string, HTMLElement>()
+
+const colCount = computed(() => colMode.value)
+const { columns } = useColumnLayout(items, colCount)
 
 let seenObserver: IntersectionObserver | null = null
 let scrollObserver: IntersectionObserver | null = null
@@ -25,7 +29,6 @@ async function loadMore() {
   if (loading.value || !hasMore.value) return
   loading.value = true
   try {
-    // Only load un-favorited, un-deleted media
     const res = await fetchRandom(50, [...loadedIds.value], mediaType.value, false, false)
     for (const item of res.items) loadedIds.value.add(item.id)
     items.value.push(...res.items)
@@ -46,11 +49,9 @@ function setMediaType(type: MediaType | null) {
 }
 
 function cycleColMode() {
-  const modes: (3 | 5 | 6)[] = [3, 5, 6]
+  const modes = [3, 5, 6]
   colMode.value = modes[(modes.indexOf(colMode.value) + 1) % 3]
 }
-
-const colClass = computed(() => `masonry masonry-${colMode.value}`)
 
 function cardBorderClass(item: MediaItem) {
   if (favoriteIds.value.has(item.id)) return 'ring-2 ring-yellow-400'
@@ -58,7 +59,6 @@ function cardBorderClass(item: MediaItem) {
   return ''
 }
 
-// Card click: upper half = toggle favorite, lower half = preview
 function onCardClick(e: MouseEvent, item: MediaItem) {
   const target = e.currentTarget as HTMLElement
   const imgEl = target.querySelector('img, video') as HTMLElement | null
@@ -90,7 +90,6 @@ function onPreviewKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') previewItem.value = null
 }
 
-// IntersectionObserver: track items entering viewport (for lazy observe)
 function setupSeenObserver() {
   seenObserver?.disconnect()
   seenObserver = new IntersectionObserver((entries) => {
@@ -104,10 +103,8 @@ function setupSeenObserver() {
   }, { root: scrollRef.value, threshold: 0 })
 }
 
-// IntersectionObserver: detect when item's top edge touches viewport top edge
 function setupScrollObserver() {
   scrollObserver?.disconnect()
-  // Root is a 1px tall strip at the top of the scroll area
   scrollObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const id = (entry.target as HTMLElement).dataset.id
@@ -121,14 +118,12 @@ function observeCard(el: HTMLElement, id: string) {
   seenObserver?.observe(el)
 }
 
-// Infinite scroll
 function onScroll() {
   if (!scrollRef.value || loading.value || !hasMore.value) return
   const el = scrollRef.value
   if (el.scrollHeight - el.scrollTop - el.clientHeight < 600) loadMore()
 }
 
-// Exit: batch delete all red-bordered (scrolled past + not favorited) items
 async function exitTurbo() {
   const toDelete = items.value
     .filter(item => scrolledPastIds.value.has(item.id) && !favoriteIds.value.has(item.id))
@@ -185,40 +180,42 @@ onUnmounted(() => {
 
     <!-- Scrollable area -->
     <div ref="scrollRef" class="flex-1 overflow-y-auto px-4 py-4" @scroll="onScroll">
-      <div :class="colClass">
-        <div
-          v-for="item in items"
-          :key="item.id"
-          :data-id="item.id"
-          :ref="(el: any) => el && observeCard(el as HTMLElement, item.id)"
-          class="masonry-item rounded-lg overflow-hidden cursor-pointer transition-shadow"
-          :class="cardBorderClass(item)"
-          @click="onCardClick($event, item)"
-        >
-          <img
-            v-if="item.media_type === 'image'"
-            :src="getStreamUrl(item.id)"
-            class="w-full block"
-            loading="lazy"
-          />
-          <div v-else class="relative">
+      <div class="flex gap-3">
+        <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-3">
+          <div
+            v-for="item in col"
+            :key="item.id"
+            :data-id="item.id"
+            :ref="(el: any) => el && observeCard(el as HTMLElement, item.id)"
+            class="rounded-lg overflow-hidden cursor-pointer transition-shadow"
+            :class="cardBorderClass(item)"
+            @click="onCardClick($event, item)"
+          >
             <img
-              v-if="item.thumbnail_path"
-              :src="getThumbnailUrl(item.id)"
+              v-if="item.media_type === 'image'"
+              :src="getStreamUrl(item.id)"
               class="w-full block"
               loading="lazy"
             />
-            <video
-              v-else
-              :src="getStreamUrl(item.id)"
-              preload="metadata"
-              class="w-full block"
-              muted
-            />
-            <div class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
-              <svg class="w-8 h-8 text-white/70" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
+            <div v-else class="relative">
+              <img
+                v-if="item.thumbnail_path"
+                :src="getThumbnailUrl(item.id)"
+                class="w-full block"
+                loading="lazy"
+              />
+              <video
+                v-else
+                :src="getStreamUrl(item.id)"
+                preload="metadata"
+                class="w-full block"
+                muted
+              />
+              <div class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
+                <svg class="w-8 h-8 text-white/70" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
             </div>
           </div>
         </div>

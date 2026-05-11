@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
 import { useFeed } from '../composables/useFeed'
+import { useColumnLayout } from '../composables/useColumnLayout'
 import { useTheme } from '../composables/useTheme'
 import TypeFilter from '../components/TypeFilter.vue'
 import MediaCard from '../components/MediaCard.vue'
@@ -19,11 +20,13 @@ const showRoaming = ref(false)
 const showTurbo = ref(false)
 const colMode = ref<'auto' | '1' | '2'>('auto')
 
-function getColClass() {
-  if (colMode.value === '1') return 'masonry masonry-1'
-  if (colMode.value === '2') return 'masonry masonry-2'
-  return 'masonry'
-}
+const colCount = computed(() => {
+  if (colMode.value === '1') return 1
+  if (colMode.value === '2') return 2
+  return 4
+})
+
+const { columns } = useColumnLayout(items, colCount)
 
 function cycleColMode() {
   const modes: ('auto' | '1' | '2')[] = ['auto', '1', '2']
@@ -119,14 +122,19 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
     </header>
 
     <main class="px-4 lg:px-6 py-4">
-      <div :class="getColClass()">
-        <MediaCard
-          v-for="item in items"
-          :key="item.id"
-          :item="item"
-          @click="activeItem = $event"
-          @updated="onItemUpdated"
-        />
+      <div
+        class="flex gap-3"
+        :style="colMode === '1' ? 'max-width: 720px; margin: 0 auto' : ''"
+      >
+        <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-3">
+          <MediaCard
+            v-for="item in col"
+            :key="item.id"
+            :item="item"
+            @click="activeItem = $event"
+            @updated="onItemUpdated"
+          />
+        </div>
       </div>
 
       <div v-if="loading" class="py-8 text-center text-gray-400">
