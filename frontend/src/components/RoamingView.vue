@@ -176,6 +176,15 @@ function onVolumeChange() {
   userVolume.value = videoEl.value.volume
 }
 
+// Click left/right blank area to delete/favorite (desktop)
+function handleClick(e: MouseEvent) {
+  if (isLocked.value || !current.value) return
+  const target = e.target as HTMLElement
+  if (target.tagName === 'IMG' || target.tagName === 'VIDEO') return
+  if (e.clientX < window.innerWidth / 2) handleSwipe('left')   // delete
+  else handleSwipe('right')                                      // favorite
+}
+
 // Keyboard
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
@@ -209,7 +218,7 @@ onUnmounted(() => {
     </header>
 
     <!-- Card stack -->
-    <div ref="containerRef" class="absolute inset-0">
+    <div ref="containerRef" class="absolute inset-0" @click="handleClick">
       <!-- Previous item (above viewport) -->
       <div
         v-if="prevItem"
