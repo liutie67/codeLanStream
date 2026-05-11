@@ -38,7 +38,20 @@ export function useColumnLayout(items: Ref<MediaItem[]>, colCount: Ref<number>) 
     }
   })
 
+  function updateItem(updated: MediaItem) {
+    const cols = [...columns.value]
+    for (let i = 0; i < cols.length; i++) {
+      const idx = cols[i].findIndex(item => item.id === updated.id)
+      if (idx !== -1) {
+        cols[i] = [...cols[i]]
+        cols[i][idx] = updated
+        columns.value = cols
+        return
+      }
+    }
+  }
+
   distribute()
 
-  return { columns }
+  return { columns, updateItem }
 }

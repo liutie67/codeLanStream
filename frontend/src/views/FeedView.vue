@@ -26,7 +26,8 @@ const colCount = computed(() => {
   return 4
 })
 
-const { columns } = useColumnLayout(items, colCount)
+const { columns, updateItem } = useColumnLayout(items, colCount)
+const columnRef = ref<HTMLElement>()
 
 function cycleColMode() {
   const modes: ('auto' | '1' | '2')[] = ['auto', '1', '2']
@@ -42,12 +43,18 @@ const colIcon = () => {
 function onItemUpdated(updated: MediaItem) {
   const idx = items.value.findIndex(i => i.id === updated.id)
   if (idx !== -1) items.value[idx] = updated
+  updateItem(updated)
 }
 
 function onScroll() {
-  if (loading.value || !hasMore.value) return
-  const bottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY
-  if (bottom < 600) loadMore()
+  if (loading.value || !hasMore.value || !columnRef.value) return
+  const colEls = columnRef.value.children
+  let minBottom = Infinity
+  for (const col of colEls) {
+    const bottom = (col as HTMLElement).getBoundingClientRect().bottom
+    if (bottom < minBottom) minBottom = bottom
+  }
+  if (minBottom < window.innerHeight + 600) loadMore()
 }
 
 onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
@@ -123,7 +130,8 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 
     <main class="px-4 lg:px-6 py-4">
       <div
-        class="flex gap-3"
+        ref="columnRef"
+        class="flex items-start gap-3"
         :style="colMode === '1' ? 'max-width: 720px; margin: 0 auto' : ''"
       >
         <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-3">

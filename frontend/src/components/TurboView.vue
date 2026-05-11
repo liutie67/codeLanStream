@@ -21,7 +21,7 @@ const cardRefs = new Map<string, HTMLElement>()
 
 const colCount = computed(() => colMode.value)
 const { columns } = useColumnLayout(items, colCount)
-
+const columnRef = ref<HTMLElement>()
 let seenObserver: IntersectionObserver | null = null
 let scrollObserver: IntersectionObserver | null = null
 
@@ -119,9 +119,15 @@ function observeCard(el: HTMLElement, id: string) {
 }
 
 function onScroll() {
-  if (!scrollRef.value || loading.value || !hasMore.value) return
-  const el = scrollRef.value
-  if (el.scrollHeight - el.scrollTop - el.clientHeight < 600) loadMore()
+  if (!scrollRef.value || loading.value || !hasMore.value || !columnRef.value) return
+  const scrollBottom = scrollRef.value.getBoundingClientRect().bottom
+  const colEls = columnRef.value.children
+  let minBottom = Infinity
+  for (const col of colEls) {
+    const bottom = (col as HTMLElement).getBoundingClientRect().bottom
+    if (bottom < minBottom) minBottom = bottom
+  }
+  if (minBottom < scrollBottom + 600) loadMore()
 }
 
 async function exitTurbo() {
@@ -180,7 +186,7 @@ onUnmounted(() => {
 
     <!-- Scrollable area -->
     <div ref="scrollRef" class="flex-1 overflow-y-auto px-4 py-4" @scroll="onScroll">
-      <div class="flex gap-3">
+      <div ref="columnRef" class="flex items-start gap-3">
         <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-3">
           <div
             v-for="item in col"
