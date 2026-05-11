@@ -207,7 +207,17 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 bg-black text-white overflow-hidden select-none" style="touch-action: none">
+  <div
+    class="fixed inset-0 z-50 text-white overflow-hidden select-none"
+    :style="{
+      touchAction: 'none',
+      background: current?.is_deleted && current?.is_favorited
+        ? 'linear-gradient(to right, rgba(239,68,68,1) 50%, rgba(234,179,8,1) 50%)'
+        : current?.is_deleted ? 'rgba(239,68,68,1)'
+        : current?.is_favorited ? 'rgba(234,179,8,1)'
+        : 'black',
+    }"
+  >
     <!-- Top bar -->
     <header class="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-4 py-3">
       <button @click="emit('close')" class="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-white/70 hover:text-white transition-colors">
@@ -311,10 +321,6 @@ onUnmounted(() => {
         <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/>
       </svg>
     </div>
-
-    <!-- Status indicator lines -->
-    <div v-if="current && current.is_deleted" class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 z-20 pointer-events-none" />
-    <div v-if="current && current.is_favorited" class="absolute right-0 top-0 bottom-0 w-1 bg-yellow-500 z-20 pointer-events-none" />
 
     <!-- Bottom info -->
     <div v-if="current" class="absolute bottom-0 inset-x-0 z-10 px-4 pb-4">
