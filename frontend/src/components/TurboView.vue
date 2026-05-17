@@ -4,6 +4,7 @@ import type { MediaItem, MediaType } from '../api/types'
 import { fetchRandom, getStreamUrl, getThumbnailUrl, toggleFavorite, batchUpdate } from '../api/client'
 import { useColumnLayout } from '../composables/useColumnLayout'
 import TypeFilter from './TypeFilter.vue'
+import VideoProgress from './VideoProgress.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -15,6 +16,8 @@ const hasMore = ref(true)
 const favoriteIds = ref<Set<string>>(new Set())
 const scrolledPastIds = ref<Set<string>>(new Set())
 const previewItem = ref<MediaItem | null>(null)
+const previewVideoEl = ref<HTMLVideoElement | null>(null)
+const previewPaused = ref(true)
 const colMode = ref(5)
 const scrollRef = ref<HTMLElement>()
 const cardRefs = new Map<string, HTMLElement>()
@@ -275,14 +278,30 @@ onUnmounted(() => {
         >
           &times;
         </button>
-        <video
-          v-if="previewItem.media_type === 'video'"
-          :src="getStreamUrl(previewItem.id)"
-          controls
-          autoplay
-          class="max-w-full max-h-full rounded-lg"
-          @click.stop
-        />
+        <template v-if="previewItem.media_type === 'video'">
+          <div class="relative max-w-full max-h-full">
+            <video
+              ref="previewVideoEl"
+              :src="getStreamUrl(previewItem.id)"
+              autoplay
+              class="max-w-full max-h-full rounded-lg"
+              @click.stop="previewVideoEl && (previewVideoEl.paused ? previewVideoEl.play() : previewVideoEl.pause())"
+              @pause="previewPaused = true"
+              @play="previewPaused = false"
+            />
+            <div
+              v-if="previewPaused"
+              class="absolute inset-0 flex items-center justify-center pointer-events-none"
+            >
+              <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
+                <svg class="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+              </div>
+            </div>
+          </div>
+          <div class="fixed bottom-0 inset-x-0 z-10 px-4 pb-4">
+            <VideoProgress :video="previewVideoEl" />
+          </div>
+        </template>
         <img
           v-else
           :src="getStreamUrl(previewItem.id)"

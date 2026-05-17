@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import type { MediaItem } from '../api/types'
 import { getStreamUrl } from '../api/client'
+import { ref } from 'vue'
+import VideoProgress from './VideoProgress.vue'
 
 defineProps<{ item: MediaItem }>()
 const emit = defineEmits<{ close: [] }>()
+const videoEl = ref<HTMLVideoElement | null>(null)
+const videoPaused = ref(true)
 
 function onBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget) emit('close')
@@ -21,14 +25,30 @@ function onBackdropClick(e: MouseEvent) {
     >
       &times;
     </button>
-    <video
-      v-if="item.media_type === 'video'"
-      :src="getStreamUrl(item.id)"
-      controls
-      autoplay
-      class="max-w-full max-h-full rounded-lg"
-      @click.stop
-    />
+    <template v-if="item.media_type === 'video'">
+      <div class="relative max-w-full max-h-full">
+        <video
+          ref="videoEl"
+          :src="getStreamUrl(item.id)"
+          autoplay
+          class="max-w-full max-h-full rounded-lg"
+          @click.stop="videoEl && (videoEl.paused ? videoEl.play() : videoEl.pause())"
+          @pause="videoPaused = true"
+          @play="videoPaused = false"
+        />
+        <div
+          v-if="videoPaused"
+          class="absolute inset-0 flex items-center justify-center pointer-events-none"
+        >
+          <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
+            <svg class="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          </div>
+        </div>
+      </div>
+      <div class="fixed bottom-0 inset-x-0 z-10 px-4 pb-4">
+        <VideoProgress :video="videoEl" />
+      </div>
+    </template>
     <img
       v-else
       :src="getStreamUrl(item.id)"

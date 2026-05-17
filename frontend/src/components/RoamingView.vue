@@ -4,6 +4,7 @@ import type { MediaItem, MediaType } from '../api/types'
 import { fetchRandom, getStreamUrl, toggleFavorite, toggleDelete } from '../api/client'
 import { useSwipe, type SwipeDirection } from '../composables/useSwipe'
 import TypeFilter from './TypeFilter.vue'
+import VideoProgress from './VideoProgress.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -23,6 +24,7 @@ const offsetX = ref(0)
 const videoEl = ref<HTMLVideoElement | null>(null)
 const isMuted = ref(true)
 const userVolume = ref(0)
+const videoPaused = ref(true)
 const lastAction = ref<{ itemId: string; action: 'favorite' | 'delete' } | null>(null)
 
 const current = computed(() => items.value[currentIndex.value])
@@ -183,6 +185,7 @@ watch(current, async () => {
     try {
       await videoEl.value.play()
       videoEl.value.muted = wantMuted
+      videoPaused.value = false
     } catch { /* autoplay blocked */ }
   }
   if (currentIndex.value >= items.value.length - 5) loadMore()
@@ -194,7 +197,7 @@ function onVolumeChange() {
   userVolume.value = videoEl.value.volume
 }
 
-// Click left/right blank area to delete/favorite (desktop)
+// Click left/right blank area to delete/favorite (desktop only)
 function handleClick(e: MouseEvent) {
   if (isLocked.value || !current.value) return
   const target = e.target as HTMLElement
@@ -308,10 +311,20 @@ onUnmounted(() => {
           muted
           loop
           playsinline
-          controls
           class="max-w-full max-h-full rounded-lg"
+          @click.stop="videoEl && (videoEl.paused ? videoEl.play() : videoEl.pause())"
+          @pause="videoPaused = true"
+          @play="videoPaused = false"
           @volumechange="onVolumeChange"
         />
+        <div
+          v-if="current.media_type === 'video' && videoPaused"
+          class="absolute inset-0 flex items-center justify-center pointer-events-none"
+        >
+          <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
+            <svg class="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          </div>
+        </div>
       </div>
 
       <!-- Next item (below viewport) -->
@@ -355,8 +368,9 @@ onUnmounted(() => {
       </svg>
     </div>
 
-    <!-- Bottom info -->
-    <div v-if="current" class="absolute bottom-0 inset-x-0 z-10 px-4 pb-4">
+    <!-- Bottom info + progress -->
+    <div v-if="current" class="absolute bottom-0 inset-x-0 z-10 px-4 pb-4" @pointerdown.stop @click.stop @touchstart.stop>
+      <VideoProgress v-if="current.media_type === 'video'" :video="videoEl" />
       <p class="text-sm text-white/60 text-center truncate">{{ current.file_path.split(/[/\\]/).pop() }}</p>
     </div>
   </div>
