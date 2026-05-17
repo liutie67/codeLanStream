@@ -182,6 +182,10 @@ watch(current, async () => {
     const wantMuted = isMuted.value
     videoEl.value.muted = true
     videoEl.value.volume = userVolume.value || 1
+    // Schedule delayed check BEFORE await — play() Promise may hang on iPadOS
+    setTimeout(() => {
+      if (videoEl.value && !videoEl.value.paused) videoPaused.value = false
+    }, 500)
     try {
       await videoEl.value.play()
       videoEl.value.muted = wantMuted
@@ -199,6 +203,7 @@ function onVolumeChange() {
 
 // Click left/right blank area to delete/favorite (desktop only)
 function handleClick(e: MouseEvent) {
+  if ('ontouchstart' in window) return
   if (isLocked.value || !current.value) return
   const target = e.target as HTMLElement
   if (target.tagName === 'IMG' || target.tagName === 'VIDEO') return
