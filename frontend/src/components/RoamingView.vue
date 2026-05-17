@@ -163,9 +163,13 @@ const feedbackOpacity = computed(() => Math.min(0.5, Math.abs(offsetX.value) / 2
 watch(current, async () => {
   await nextTick()
   if (videoEl.value) {
-    videoEl.value.muted = isMuted.value
-    videoEl.value.volume = userVolume.value
-    try { await videoEl.value.play() } catch { /* autoplay blocked */ }
+    const wantMuted = isMuted.value
+    videoEl.value.muted = true
+    videoEl.value.volume = userVolume.value || 1
+    try {
+      await videoEl.value.play()
+      videoEl.value.muted = wantMuted
+    } catch { /* autoplay blocked */ }
   }
   if (currentIndex.value >= items.value.length - 5) loadMore()
 })
