@@ -11,6 +11,7 @@ const items = ref<MediaItem[]>([])
 const currentIndex = ref(0)
 const loadedIds = ref<Set<string>>(new Set())
 const mediaType = ref<MediaType | null>(null)
+const hideMarked = ref(false)
 const loading = ref(false)
 const hasMore = ref(true)
 const isLocked = ref(false)
@@ -132,13 +133,26 @@ async function loadMore() {
   if (loading.value || !hasMore.value) return
   loading.value = true
   try {
-    const res = await fetchRandom(20, [...loadedIds.value], mediaType.value)
+    const res = await fetchRandom(
+      20, [...loadedIds.value], mediaType.value,
+      hideMarked.value ? false : null,
+      hideMarked.value ? false : null,
+    )
     for (const item of res.items) loadedIds.value.add(item.id)
     items.value.push(...res.items)
     if (res.items.length < 20) hasMore.value = false
   } finally {
     loading.value = false
   }
+}
+
+function toggleHideMarked() {
+  hideMarked.value = !hideMarked.value
+  items.value = []
+  loadedIds.value = new Set()
+  currentIndex.value = 0
+  hasMore.value = true
+  loadMore()
 }
 
 function setMediaType(type: MediaType | null) {
@@ -224,9 +238,24 @@ onUnmounted(() => {
   >
     <!-- Top bar -->
     <header class="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-4 py-3">
-      <button @click="emit('close')" class="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-white/70 hover:text-white transition-colors">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
-      </button>
+      <div class="flex items-center gap-2">
+        <button @click="emit('close')" class="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-white/70 hover:text-white transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+        <button
+          @click="toggleHideMarked"
+          class="h-8 px-2.5 flex items-center gap-1 rounded-full text-xs transition-colors"
+          :class="hideMarked ? 'bg-blue-500/80 text-white' : 'bg-white/10 text-white/50 hover:text-white/80'"
+          :title="hideMarked ? '显示全部' : '隐藏已收藏/已删除'"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path v-if="hideMarked" stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M10.5 10.5a3 3 0 004.243 4.243m0 0l1.536-1.536M6.75 6.75a7.5 7.5 0 009.743 9.743"/>
+            <path v-if="hideMarked" stroke-linecap="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <path v-if="!hideMarked" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            <path v-if="!hideMarked" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+          </svg>
+        </button>
+      </div>
       <TypeFilter :current="mediaType" @change="setMediaType" />
       <span class="text-xs text-white/50 tabular-nums w-12 text-right">{{ currentIndex + 1 }}</span>
     </header>
