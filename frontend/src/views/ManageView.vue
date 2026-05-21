@@ -6,13 +6,13 @@ import { fetchFeed, getThumbnailUrl, getStreamUrl, purgeDeleted, exportFavorites
 import { useTheme } from '../composables/useTheme'
 import VideoProgress from '../components/VideoProgress.vue'
 
-type FilterMode = 'all' | 'favorited' | 'deleted'
 type ThumbSize = 'small' | 'medium' | 'large'
 
 const { isDark } = useTheme()
 
 const items = ref<MediaItem[]>([])
-const filter = ref<FilterMode>('all')
+const filterFav = ref(false)
+const filterDel = ref(false)
 const selected = ref<Set<string>>(new Set())
 const exportDir = ref('')
 const message = ref('')
@@ -23,7 +23,7 @@ const thumbSize = ref<ThumbSize>('small')
 const previewItem = ref<MediaItem | null>(null)
 const previewVideoEl = ref<HTMLVideoElement | null>(null)
 const previewPaused = ref(true)
-const counts = ref({ all: 0, favorited: 0, deleted: 0 })
+const counts = ref({ all: 0, favorited: 0, deleted: 0, favAndDel: 0 })
 const sentinelRef = ref<HTMLElement>()
 let observer: IntersectionObserver | null = null
 
@@ -51,12 +51,13 @@ function cycleThumbSize() {
 }
 
 async function loadCounts() {
-  const [all, fav, del] = await Promise.all([
+  const [all, fav, del, favDel] = await Promise.all([
     fetchFeed({ page: 1, page_size: 1 }),
     fetchFeed({ page: 1, page_size: 1, is_favorited: true }),
     fetchFeed({ page: 1, page_size: 1, is_deleted: true }),
+    fetchFeed({ page: 1, page_size: 1, is_favorited: true, is_deleted: true }),
   ])
-  counts.value = { all: all.total, favorited: fav.total, deleted: del.total }
+  counts.value = { all: all.total, favorited: fav.total, deleted: del.total, favAndDel: favDel.total }
 }
 
 async function loadItems(reset = false) {
@@ -72,8 +73,8 @@ async function loadItems(reset = false) {
 
   try {
     const params: Record<string, unknown> = { page: page.value, page_size: PAGE_SIZE }
-    if (filter.value === 'favorited') params.is_favorited = true
-    if (filter.value === 'deleted') params.is_deleted = true
+    if (filterFav.value) params.is_favorited = true
+    if (filterDel.value) params.is_deleted = true
 
     const res = await fetchFeed(params as Parameters<typeof fetchFeed>[0])
     if (reset) items.value = res.items
@@ -85,9 +86,9 @@ async function loadItems(reset = false) {
   }
 }
 
-async function setFilter(f: FilterMode) {
-  if (filter.value === f) return
-  filter.value = f
+async function setFilter(fav: boolean, del: boolean) {
+  filterFav.value = fav
+  filterDel.value = del
   selected.value.clear()
   await loadItems(true)
 }
@@ -134,7 +135,7 @@ async function doToggleFavorite(id: string) {
   const idx = items.value.findIndex(i => i.id === updated.id)
   if (idx !== -1) items.value[idx] = updated
   loadCounts()
-  if (filter.value === 'favorited') await loadItems(true)
+  if (filterFav.value) await loadItems(true)
 }
 
 async function doToggleDelete(id: string) {
@@ -142,7 +143,7 @@ async function doToggleDelete(id: string) {
   const idx = items.value.findIndex(i => i.id === updated.id)
   if (idx !== -1) items.value[idx] = updated
   loadCounts()
-  if (filter.value === 'deleted') await loadItems(true)
+  if (filterDel.value) await loadItems(true)
 }
 
 function openPreview(item: MediaItem) {
@@ -236,16 +237,35 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
           <button
-            v-for="f in (['all', 'favorited', 'deleted'] as FilterMode[])"
-            :key="f"
-            @click="setFilter(f)"
+            @click="setFilter(false, false)"
             :class="[
               'px-3 py-1 rounded-full text-xs font-medium transition-colors',
-              filter === f ? 'bg-blue-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
+              !filterFav && !filterDel ? 'bg-blue-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
             ]"
           >
-            {{ f === 'all' ? `全部 (${counts.all})` : f === 'favorited' ? `已收藏 (${counts.favorited})` : `已删除 (${counts.deleted})` }}
+            全部 ({{ counts.all }})
           </button>
+          <button
+            @click="setFilter(!filterFav, filterDel)"
+            :class="[
+              'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+              filterFav ? 'bg-pink-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
+            ]"
+          >
+            已收藏 ({{ counts.favorited }})
+          </button>
+          <button
+            @click="setFilter(filterFav, !filterDel)"
+            :class="[
+              'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+              filterDel ? 'bg-red-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
+            ]"
+          >
+            已删除 ({{ counts.deleted }})
+          </button>
+          <span v-if="filterFav && filterDel" class="text-xs text-gray-500">
+            交集: {{ counts.favAndDel }} 项
+          </span>
           <button
             @click="cycleThumbSize"
             :class="['px-3 py-1 rounded-full text-xs font-medium transition-colors', isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700']"
