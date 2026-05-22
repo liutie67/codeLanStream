@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onUnmounted } from 'vue'
 
-const props = defineProps<{ video: HTMLVideoElement | null }>()
+const props = defineProps<{ video: HTMLVideoElement | null; tallBar?: boolean }>()
 
 const barRef = ref<HTMLElement>()
 const volBarRef = ref<HTMLElement>()
@@ -128,11 +128,11 @@ onUnmounted(() => cancelAnimationFrame(raf))
 </script>
 
 <template>
-  <div class="select-none pt-3" style="touch-action: none" @pointerdown.stop @click.stop @touchstart.stop>
+  <div :class="['select-none pt-3', tallBar ? 'flex flex-col flex-1' : '']" style="touch-action: none" @pointerdown.stop @click.stop @touchstart.stop>
     <!-- Progress bar — tall touch target for mobile -->
     <div
       ref="barRef"
-      class="relative h-10 flex items-center cursor-pointer"
+      :class="['relative flex items-center cursor-pointer', tallBar ? 'flex-1' : 'h-10']"
       @pointerdown="onProgressDown"
       @pointermove="onProgressMove"
       @pointerup="onUp"

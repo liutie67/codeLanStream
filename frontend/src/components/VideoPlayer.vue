@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import type { MediaItem } from '../api/types'
 import { getStreamUrl } from '../api/client'
-import { ref } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import VideoProgress from './VideoProgress.vue'
 
-defineProps<{ item: MediaItem }>()
+const props = defineProps<{ item: MediaItem }>()
 const emit = defineEmits<{ close: [] }>()
 const videoEl = ref<HTMLVideoElement | null>(null)
 const videoPaused = ref(true)
@@ -12,6 +12,18 @@ const videoPaused = ref(true)
 function onBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget) emit('close')
 }
+
+function onKeydown(e: KeyboardEvent) {
+  if (!videoEl.value || props.item.media_type !== 'video') return
+  if (e.key === 'j') videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime - 30)
+  else if (e.key === 'k') videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
+}
+
+watch(() => props.item, () => {
+  window.addEventListener('keydown', onKeydown)
+}, { immediate: true })
+
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>

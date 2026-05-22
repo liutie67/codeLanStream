@@ -26,6 +26,7 @@ const isMuted = ref(true)
 const userVolume = ref(0)
 const videoPaused = ref(true)
 const lastAction = ref<{ itemId: string; action: 'favorite' | 'delete' } | null>(null)
+const isDesktop = !('ontouchstart' in window)
 
 const current = computed(() => items.value[currentIndex.value])
 const prevItem = computed(() => currentIndex.value > 0 ? items.value[currentIndex.value - 1] : null)
@@ -218,6 +219,8 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') handleSwipe('down')
   else if (e.key === 'f') handleSwipe('right')
   else if (e.key === 'd') handleSwipe('left')
+  else if (e.key === 'j' && videoEl.value) videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime - 30)
+  else if (e.key === 'k' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
 }
 
 onMounted(() => {
@@ -373,9 +376,13 @@ onUnmounted(() => {
       </svg>
     </div>
 
-    <!-- Bottom info + progress -->
-    <div v-if="current" class="absolute bottom-0 inset-x-0 z-10 px-4 pb-4" @pointerdown.stop @click.stop @touchstart.stop>
-      <VideoProgress v-if="current.media_type === 'video'" :video="videoEl" />
+    <!-- Bottom info + progress — desktop: bottom 25vh for large seek target -->
+    <div
+      v-if="current"
+      class="absolute bottom-0 inset-x-0 z-10 px-4 pb-4 md:h-[25vh] md:flex md:flex-col md:justify-end"
+      @pointerdown.stop @click.stop @touchstart.stop
+    >
+      <VideoProgress v-if="current.media_type === 'video'" :video="videoEl" :tall-bar="isDesktop" />
       <p class="text-sm text-white/60 text-center truncate">{{ current.file_path.split(/[/\\]/).pop() }}</p>
     </div>
   </div>

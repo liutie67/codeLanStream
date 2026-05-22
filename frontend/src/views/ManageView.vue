@@ -156,6 +156,10 @@ function closePreview() {
 
 function onPreviewKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') closePreview()
+  else if (previewItem.value?.media_type === 'video' && previewVideoEl.value) {
+    if (e.key === 'j') previewVideoEl.value.currentTime = Math.max(0, previewVideoEl.value.currentTime - 30)
+    else if (e.key === 'k') previewVideoEl.value.currentTime = Math.min(previewVideoEl.value.duration || 0, previewVideoEl.value.currentTime + 30)
+  }
 }
 
 watch(previewItem, (val) => {
