@@ -16,6 +16,7 @@ const hideMarked = ref(false)
 const loading = ref(false)
 const hasMore = ref(true)
 const isLocked = ref(false)
+const PRELOAD_COUNT = 3
 
 // Phase: 'idle' = CSS transitions on, 'dragging' = no transitions, 'animating' = transitions on
 const phase = ref<'idle' | 'dragging' | 'animating'>('idle')
@@ -31,6 +32,14 @@ const isDesktop = !('ontouchstart' in window)
 const current = computed(() => items.value[currentIndex.value])
 const prevItem = computed(() => currentIndex.value > 0 ? items.value[currentIndex.value - 1] : null)
 const nextItem = computed(() => currentIndex.value < items.value.length - 1 ? items.value[currentIndex.value + 1] : null)
+const preloadItems = computed(() => {
+  const start = currentIndex.value + 2
+  const end = Math.min(start + PRELOAD_COUNT, items.value.length)
+  return items.value.slice(start, end).map((item, i) => ({
+    item,
+    offset: start + i,
+  }))
+})
 const containerRef = ref<HTMLElement>()
 
 const hasTransition = computed(() => phase.value !== 'dragging')
@@ -193,7 +202,7 @@ watch(current, async () => {
       videoPaused.value = false
     } catch { /* autoplay blocked */ }
   }
-  if (currentIndex.value >= items.value.length - 5) loadMore()
+  if (currentIndex.value >= items.value.length - 8) loadMore()
 })
 
 function onVolumeChange() {
@@ -352,6 +361,32 @@ onUnmounted(() => {
         <video
           v-else
           :src="getStreamUrl(nextItem.id)"
+          muted
+          playsinline
+          class="max-w-full max-h-full rounded-lg"
+        />
+      </div>
+
+      <!-- Preload items (off-screen, hidden) -->
+      <div
+        v-for="{ item, offset } in preloadItems"
+        :key="item.id"
+        class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
+        :style="{
+          transform: `translateY(${(offset - currentIndex) * 100}%)`,
+          visibility: 'hidden',
+          pointerEvents: 'none',
+        }"
+      >
+        <img
+          v-if="item.media_type === 'image'"
+          :src="getStreamUrl(item.id)"
+          class="max-w-full max-h-full object-contain rounded-lg"
+        />
+        <video
+          v-else
+          :src="getStreamUrl(item.id)"
+          preload="auto"
           muted
           playsinline
           class="max-w-full max-h-full rounded-lg"
