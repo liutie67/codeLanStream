@@ -72,6 +72,7 @@ export async function toggleDelete(id: string): Promise<MediaItem> {
 
 export async function purgeDeleted(): Promise<{ deleted_count: number }> {
   const res = await fetch(`${API_BASE}/manage/purge`, { method: 'POST' })
+  if (!res.ok) throw new Error(`清理失败: ${res.status}`)
   return res.json()
 }
 

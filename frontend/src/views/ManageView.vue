@@ -51,13 +51,15 @@ function cycleThumbSize() {
 }
 
 async function loadCounts() {
-  const [all, fav, del, favDel] = await Promise.all([
-    fetchFeed({ page: 1, page_size: 1 }),
-    fetchFeed({ page: 1, page_size: 1, is_favorited: true }),
-    fetchFeed({ page: 1, page_size: 1, is_deleted: true }),
-    fetchFeed({ page: 1, page_size: 1, is_favorited: true, is_deleted: true }),
-  ])
-  counts.value = { all: all.total, favorited: fav.total, deleted: del.total, favAndDel: favDel.total }
+  try {
+    const [all, fav, del, favDel] = await Promise.all([
+      fetchFeed({ page: 1, page_size: 1 }),
+      fetchFeed({ page: 1, page_size: 1, is_favorited: true }),
+      fetchFeed({ page: 1, page_size: 1, is_deleted: true }),
+      fetchFeed({ page: 1, page_size: 1, is_favorited: true, is_deleted: true }),
+    ])
+    counts.value = { all: all.total, favorited: fav.total, deleted: del.total, favAndDel: favDel.total }
+  } catch { /* loadCounts 失败不阻塞页面 */ }
 }
 
 async function loadItems(reset = false) {
@@ -116,10 +118,19 @@ async function doBatch(action: string) {
 }
 
 async function doPurge() {
-  if (!counts.value.deleted || !confirm(`确定物理删除 ${counts.value.deleted} 个文件？此操作不可撤销。`)) return
-  const res = await purgeDeleted()
-  message.value = `已删除 ${res.deleted_count} 个文件`
-  await Promise.all([loadItems(true), loadCounts()])
+  if (!counts.value.deleted) {
+    message.value = '没有需要清理的已删除文件'
+    setTimeout(() => message.value = '', 3000)
+    return
+  }
+  if (!confirm(`确定物理删除 ${counts.value.deleted} 个文件？此操作不可撤销。`)) return
+  try {
+    const res = await purgeDeleted()
+    message.value = `已删除 ${res.deleted_count} 个文件`
+    await Promise.all([loadItems(true), loadCounts()])
+  } catch (e: any) {
+    message.value = e.message || '清理失败'
+  }
   setTimeout(() => message.value = '', 3000)
 }
 
