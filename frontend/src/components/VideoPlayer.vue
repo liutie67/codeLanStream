@@ -38,12 +38,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       &times;
     </button>
     <template v-if="item.media_type === 'video'">
-      <div class="relative max-w-full max-h-full">
+      <div class="relative max-w-full max-h-[calc(100vh-2rem)]">
         <video
           ref="videoEl"
           :src="getStreamUrl(item.id)"
           autoplay
-          class="max-w-full max-h-full rounded-lg"
+          class="max-w-full max-h-[calc(100vh-2rem)] rounded-lg"
           @click.stop="videoEl && (videoEl.paused ? videoEl.play() : videoEl.pause())"
           @pause="videoPaused = true"
           @play="videoPaused = false"
