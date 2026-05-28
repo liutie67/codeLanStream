@@ -234,12 +234,16 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     if (videoEl.value) videoEl.value.paused ? videoEl.value.play() : videoEl.value.pause()
   } else if (e.key === 'Escape') emit('close')
-  else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') handleSwipe('up')
-  else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') handleSwipe('down')
+  else if (e.key === 'ArrowDown') handleSwipe('up')
+  else if (e.key === 'ArrowUp') handleSwipe('down')
+  else if (e.key === 'ArrowLeft' && videoEl.value) videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime - 30)
+  else if (e.key === 'ArrowRight' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
   else if (e.key === 'f') handleSwipe('right')
   else if (e.key === 'd') handleSwipe('left')
-  else if (e.key === 'j' && videoEl.value) videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime - 30)
-  else if (e.key === 'k' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
+  else if (e.key === 'm' && videoEl.value) {
+    videoEl.value.muted = !videoEl.value.muted
+    isMuted.value = videoEl.value.muted
+  }
 }
 
 onMounted(() => {
