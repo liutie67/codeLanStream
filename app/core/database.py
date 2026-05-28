@@ -22,3 +22,7 @@ async def create_tables():
             await conn.execute(text("ALTER TABLE media ADD COLUMN root_dir VARCHAR(1024)"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE media ADD COLUMN preview_path VARCHAR(1024)"))
+        except Exception:
+            pass

@@ -12,6 +12,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 THUMBNAIL_DIR = Path("./data/thumbnails")
+PREVIEW_DIR = Path("./data/previews")
 
 
 class ThumbnailStrategy(ABC):
@@ -51,17 +52,30 @@ class FirstFrameStrategy(ThumbnailStrategy):
             return False
 
 
-# 后续可扩展：
-# class GridStrategy(ThumbnailStrategy):
-#     """等间距取9/16帧拼接成封面。"""
-#     def generate(self, video_path, output_path): ...
+class GridPreviewStrategy(ThumbnailStrategy):
+    """使用 video_preview 包生成 4x4 网格预览图。"""
 
-# class AIKeyFrameStrategy(ThumbnailStrategy):
-#     """AI 抓取关键帧作为封面。"""
-#     def generate(self, video_path, output_path): ...
+    def generate(self, video_path: str, output_path: Path) -> bool:
+        if not Path(video_path).exists():
+            return False
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from video_preview import generate_video_preview
+            generate_video_preview(
+                video_path=video_path,
+                output_path=str(output_path),
+                rows=4,
+                cols=4,
+                preview_width=1980,
+            )
+            return output_path.exists()
+        except Exception as e:
+            logger.warning("Grid preview failed for %s: %s", video_path, str(e)[:200])
+            return False
 
 
 DEFAULT_STRATEGY = FirstFrameStrategy()
+GRID_STRATEGY = GridPreviewStrategy()
 
 
 def generate_thumbnail(
@@ -75,5 +89,18 @@ def generate_thumbnail(
     if output_path.exists():
         return str(output_path)
     if strat.generate(video_path, output_path):
+        return str(output_path)
+    return None
+
+
+def generate_preview(
+    video_path: str,
+    media_id: str,
+) -> str | None:
+    """为视频生成 4x4 网格预览图，返回路径或 None。"""
+    output_path = PREVIEW_DIR / f"{media_id}.png"
+    if output_path.exists():
+        return str(output_path)
+    if GRID_STRATEGY.generate(video_path, output_path):
         return str(output_path)
     return None

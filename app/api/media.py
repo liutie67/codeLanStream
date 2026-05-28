@@ -32,6 +32,19 @@ async def get_thumbnail(
     return _full_response(media.thumbnail_path, os.path.getsize(media.thumbnail_path), "image/jpeg")
 
 
+@router.get("/preview/{media_id}")
+async def get_preview(
+    media_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    media = await get_media(db, media_id)
+    if not media or not media.preview_path:
+        raise HTTPException(404, "Preview not found")
+    if not os.path.exists(media.preview_path):
+        raise HTTPException(404, "Preview file missing")
+    return _full_response(media.preview_path, os.path.getsize(media.preview_path), "image/png")
+
+
 @router.get("/feed", response_model=FeedResponse)
 async def feed(
     page: int = 1,

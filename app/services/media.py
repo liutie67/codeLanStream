@@ -1,5 +1,6 @@
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from sqlalchemy import delete as sql_delete, func, select
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse, MediaOut
-from app.services.thumbnail import generate_thumbnail
+from app.services.thumbnail import generate_thumbnail, generate_preview
 
 
 def _classify_media(ext: str) -> MediaType | None:
@@ -20,10 +21,17 @@ def _classify_media(ext: str) -> MediaType | None:
     return None
 
 
-async def scan_directory(dir_path: str, db: AsyncSession) -> int:
+async def scan_directory(
+    dir_path: str,
+    db: AsyncSession,
+    preview: bool = False,
+    workers: int | None = None,
+) -> int:
     count = 0
     path = Path(dir_path).resolve()
     root = str(path)
+    pending_previews: list[tuple[str, str]] = []  # (video_path, media_id)
+
     for file in path.rglob("*"):
         if not file.is_file():
             continue
@@ -37,10 +45,13 @@ async def scan_directory(dir_path: str, db: AsyncSession) -> int:
         if media_type is None:
             continue
 
-        exists = await db.execute(
+        existing = await db.execute(
             select(Media).where(Media.file_path == str(file.resolve()))
         )
-        if exists.scalar_one_or_none():
+        media = existing.scalar_one_or_none()
+        if media:
+            if preview and media.media_type == MediaType.VIDEO and not media.preview_path:
+                pending_previews.append((str(file.resolve()), media.id))
             continue
 
         stat = file.stat()
@@ -55,7 +66,33 @@ async def scan_directory(dir_path: str, db: AsyncSession) -> int:
         await db.flush()
         if media_type == MediaType.VIDEO:
             media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
+            if preview:
+                pending_previews.append((str(file.resolve()), media.id))
         count += 1
+
+    # 并行生成预览图
+    if pending_previews:
+        n_workers = workers or min(os.cpu_count() or 4, 4)
+        print(f"  并行生成 {len(pending_previews)} 个预览图 (workers={n_workers})")
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {
+                pool.submit(generate_preview, vp, mid): mid
+                for vp, mid in pending_previews
+            }
+            results: dict[str, str | None] = {}
+            for future in as_completed(futures):
+                mid = futures[future]
+                results[mid] = future.result()
+
+        # 批量更新数据库
+        for mid, preview_path in results.items():
+            if preview_path:
+                await db.execute(
+                    Media.__table__.update()
+                    .where(Media.id == mid)
+                    .values(preview_path=preview_path)
+                )
+                count += 1
 
     await db.commit()
     return count
@@ -262,6 +299,8 @@ async def purge_deleted(db: AsyncSession) -> int:
             os.remove(media.file_path)
         if media.thumbnail_path and os.path.exists(media.thumbnail_path):
             os.remove(media.thumbnail_path)
+        if media.preview_path and os.path.exists(media.preview_path):
+            os.remove(media.preview_path)
         await db.delete(media)
         count += 1
     await db.commit()

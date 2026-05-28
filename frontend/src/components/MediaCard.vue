@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { MediaItem } from '../api/types'
-import { getStreamUrl, getThumbnailUrl, toggleFavorite, toggleDelete } from '../api/client'
+import { getStreamUrl, getThumbnailUrl, getPreviewUrl, toggleFavorite, toggleDelete } from '../api/client'
 import { useTheme } from '../composables/useTheme'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 
 const props = defineProps<{ item: MediaItem }>()
 const emit = defineEmits<{ click: [item: MediaItem]; updated: [item: MediaItem] }>()
 const { isDark } = useTheme()
+const { thumbMode } = useThumbnailMode()
 
 function btnInactive() {
   return isDark.value
@@ -40,20 +42,38 @@ async function onDelete(e: MouseEvent) {
         loading="lazy"
       />
       <template v-else>
-        <img
-          v-if="item.thumbnail_path"
-          :src="getThumbnailUrl(item.id)"
-          :alt="'Cover ' + item.id"
-          class="w-full block"
-          loading="lazy"
-        />
-        <video
-          v-else
-          :src="getStreamUrl(item.id)"
-          preload="metadata"
-          class="w-full block"
-          muted
-        />
+        <template v-if="thumbMode === 'grid'">
+          <img
+            v-if="item.preview_path"
+            :src="getPreviewUrl(item.id)"
+            :alt="'Preview ' + item.id"
+            class="w-full block"
+            loading="lazy"
+          />
+          <div
+            v-else
+            class="w-full bg-black flex items-center justify-center"
+            style="aspect-ratio: 16/9"
+          >
+            <span class="text-white text-xs text-center px-2">还未生成对应缩略图</span>
+          </div>
+        </template>
+        <template v-else>
+          <img
+            v-if="item.thumbnail_path"
+            :src="getThumbnailUrl(item.id)"
+            :alt="'Cover ' + item.id"
+            class="w-full block"
+            loading="lazy"
+          />
+          <video
+            v-else
+            :src="getStreamUrl(item.id)"
+            preload="metadata"
+            class="w-full block"
+            muted
+          />
+        </template>
         <div class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors pointer-events-none">
           <svg class="w-10 h-10 text-white/70" fill="currentColor" viewBox="0 0 24 24">
             <path d="M8 5v14l11-7z" />

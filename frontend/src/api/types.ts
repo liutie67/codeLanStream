@@ -11,6 +11,7 @@ export interface MediaItem {
   folder: string | null
   root_dir: string | null
   thumbnail_path: string | null
+  preview_path: string | null
   is_favorited: boolean
   is_deleted: boolean
   created_at: string

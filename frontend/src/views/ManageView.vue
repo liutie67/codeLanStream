@@ -2,13 +2,15 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
-import { fetchFeed, getThumbnailUrl, getStreamUrl, purgeDeleted, exportFavorites, batchUpdate, toggleFavorite, toggleDelete } from '../api/client'
+import { fetchFeed, getThumbnailUrl, getStreamUrl, getPreviewUrl, purgeDeleted, exportFavorites, batchUpdate, toggleFavorite, toggleDelete } from '../api/client'
 import { useTheme } from '../composables/useTheme'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 import VideoProgress from '../components/VideoProgress.vue'
 
 type ThumbSize = 'small' | 'medium' | 'large'
 
 const { isDark } = useTheme()
+const { thumbMode } = useThumbnailMode()
 
 const items = ref<MediaItem[]>([])
 const filterFav = ref(false)
@@ -317,9 +319,35 @@ onUnmounted(() => {
             class="w-4 h-4 accent-blue-500 shrink-0"
           />
           <img
-            :src="item.media_type === 'video' && item.thumbnail_path ? getThumbnailUrl(item.id) : getStreamUrl(item.id)"
+            v-if="item.media_type === 'image'"
+            :src="getStreamUrl(item.id)"
             :class="[thumbClasses, 'object-cover rounded shrink-0']"
           />
+          <template v-else>
+            <img
+              v-if="thumbMode === 'grid' && item.preview_path"
+              :src="getPreviewUrl(item.id)"
+              :class="[thumbClasses, 'object-cover rounded shrink-0']"
+            />
+            <img
+              v-else-if="thumbMode !== 'grid' && item.thumbnail_path"
+              :src="getThumbnailUrl(item.id)"
+              :class="[thumbClasses, 'object-cover rounded shrink-0']"
+            />
+            <div
+              v-else-if="thumbMode === 'grid' && !item.preview_path"
+              :class="[thumbClasses, 'bg-black flex items-center justify-center rounded shrink-0']"
+            >
+              <span class="text-white text-[8px] text-center leading-tight px-1">未生成</span>
+            </div>
+            <video
+              v-else
+              :src="getStreamUrl(item.id)"
+              preload="metadata"
+              :class="[thumbClasses, 'object-cover rounded shrink-0']"
+              muted
+            />
+          </template>
           <div class="flex-1 min-w-0">
             <p class="text-sm truncate">{{ item.file_path.split(/[/\\]/).pop() }}</p>
             <p class="text-xs text-gray-500">{{ item.media_type }} · {{ (item.size_bytes / 1024).toFixed(0) }}KB</p>

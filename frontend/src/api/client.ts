@@ -60,6 +60,10 @@ export function getThumbnailUrl(mediaId: string): string {
   return `${API_BASE}/thumbnail/${mediaId}`
 }
 
+export function getPreviewUrl(mediaId: string): string {
+  return `${API_BASE}/preview/${mediaId}`
+}
+
 export async function toggleFavorite(id: string): Promise<MediaItem> {
   const res = await fetch(`${API_BASE}/${id}/favorite`, { method: 'POST' })
   return res.json()

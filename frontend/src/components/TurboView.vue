@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchRandom, getStreamUrl, getThumbnailUrl, toggleFavorite, batchUpdate } from '../api/client'
+import { fetchRandom, getStreamUrl, getThumbnailUrl, getPreviewUrl, toggleFavorite, batchUpdate } from '../api/client'
 import { useColumnLayout } from '../composables/useColumnLayout'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import VideoProgress from './VideoProgress.vue'
 
 const emit = defineEmits<{ close: [] }>()
+
+const { thumbMode } = useThumbnailMode()
 
 const items = ref<MediaItem[]>([])
 const loadedIds = ref<Set<string>>(new Set())
@@ -236,19 +239,36 @@ onUnmounted(() => {
               loading="lazy"
             />
             <div v-else class="relative">
-              <img
-                v-if="item.thumbnail_path"
-                :src="getThumbnailUrl(item.id)"
-                class="w-full block"
-                loading="lazy"
-              />
-              <video
-                v-else
-                :src="getStreamUrl(item.id)"
-                preload="metadata"
-                class="w-full block"
-                muted
-              />
+              <template v-if="thumbMode === 'grid'">
+                <img
+                  v-if="item.preview_path"
+                  :src="getPreviewUrl(item.id)"
+                  class="w-full block"
+                  loading="lazy"
+                />
+                <div
+                  v-else
+                  class="w-full bg-black flex items-center justify-center"
+                  style="aspect-ratio: 16/9"
+                >
+                  <span class="text-white text-[10px]">还未生成</span>
+                </div>
+              </template>
+              <template v-else>
+                <img
+                  v-if="item.thumbnail_path"
+                  :src="getThumbnailUrl(item.id)"
+                  class="w-full block"
+                  loading="lazy"
+                />
+                <video
+                  v-else
+                  :src="getStreamUrl(item.id)"
+                  preload="metadata"
+                  class="w-full block"
+                  muted
+                />
+              </template>
               <div class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
                 <svg class="w-8 h-8 text-white/70" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />

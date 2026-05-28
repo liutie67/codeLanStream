@@ -5,6 +5,7 @@ import type { MediaItem } from '../api/types'
 import { useFeed } from '../composables/useFeed'
 import { useColumnLayout } from '../composables/useColumnLayout'
 import { useTheme } from '../composables/useTheme'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from '../components/TypeFilter.vue'
 import MediaCard from '../components/MediaCard.vue'
 import VideoPlayer from '../components/VideoPlayer.vue'
@@ -14,6 +15,7 @@ import TurboView from '../components/TurboView.vue'
 
 const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
+const { thumbMode, toggleMode } = useThumbnailMode()
 const activeItem = ref<MediaItem | null>(null)
 const showFolders = ref(false)
 const showRoaming = ref(false)
@@ -114,6 +116,21 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
             </svg>
             <svg v-else class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M21.64 13a9 9 0 11-9-9 7 7 0 009 9z"/>
+            </svg>
+          </button>
+          <button
+            @click="toggleMode"
+            :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0',
+              thumbMode === 'grid'
+                ? 'bg-green-600 text-white'
+                : isDark ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
+            :title="thumbMode === 'grid' ? '切换到首帧缩略图' : '切换到4x4网格预览'"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
             </svg>
           </button>
           <button
