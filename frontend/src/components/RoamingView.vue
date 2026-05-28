@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchRandom, getStreamUrl, toggleFavorite, toggleDelete } from '../api/client'
+import { fetchRandom, getStreamUrl, getPreviewUrl, toggleFavorite, toggleDelete } from '../api/client'
 import { useSwipe, type SwipeDirection } from '../composables/useSwipe'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import VideoProgress from './VideoProgress.vue'
 
 const emit = defineEmits<{ close: [] }>()
+
+const { thumbMode } = useThumbnailMode()
 
 const items = ref<MediaItem[]>([])
 const currentIndex = ref(0)
@@ -192,15 +195,19 @@ watch(current, async () => {
     const wantMuted = isMuted.value
     videoEl.value.muted = true
     videoEl.value.volume = userVolume.value || 1
-    // Schedule delayed check BEFORE await — play() Promise may hang on iPadOS
-    setTimeout(() => {
-      if (videoEl.value && !videoEl.value.paused) videoPaused.value = false
-    }, 500)
-    try {
-      await videoEl.value.play()
-      videoEl.value.muted = wantMuted
-      videoPaused.value = false
-    } catch { /* autoplay blocked */ }
+    if (thumbMode.value === 'grid') {
+      videoEl.value.pause()
+      videoPaused.value = true
+    } else {
+      setTimeout(() => {
+        if (videoEl.value && !videoEl.value.paused) videoPaused.value = false
+      }, 500)
+      try {
+        await videoEl.value.play()
+        videoEl.value.muted = wantMuted
+        videoPaused.value = false
+      } catch { /* autoplay blocked */ }
+    }
   }
   if (currentIndex.value >= items.value.length - 8) loadMore()
 })
@@ -223,7 +230,10 @@ function handleClick(e: MouseEvent) {
 
 // Keyboard
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
+  if (e.key === ' ') {
+    e.preventDefault()
+    if (videoEl.value) videoEl.value.paused ? videoEl.value.play() : videoEl.value.pause()
+  } else if (e.key === 'Escape') emit('close')
   else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') handleSwipe('up')
   else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') handleSwipe('down')
   else if (e.key === 'f') handleSwipe('right')
@@ -324,7 +334,6 @@ onUnmounted(() => {
           v-else
           ref="videoEl"
           :src="getStreamUrl(current.id)"
-          autoplay
           muted
           loop
           playsinline
@@ -335,7 +344,22 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
         <div
-          v-if="current.media_type === 'video' && videoPaused"
+          v-if="current.media_type === 'video' && thumbMode === 'grid' && videoPaused && current.preview_path"
+          class="absolute inset-0 flex items-center justify-center cursor-pointer"
+          @click.stop="videoEl && videoEl.play()"
+        >
+          <img
+            :src="getPreviewUrl(current.id)"
+            class="max-w-full max-h-full object-contain rounded-lg"
+          />
+          <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
+              <svg class="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+            </div>
+          </div>
+        </div>
+        <div
+          v-else-if="current.media_type === 'video' && videoPaused"
           class="absolute inset-0 flex items-center justify-center pointer-events-none"
         >
           <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
