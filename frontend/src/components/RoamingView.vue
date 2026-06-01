@@ -240,7 +240,7 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'ArrowRight' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
   else if (e.key === 'f') handleSwipe('right')
   else if (e.key === 'd') handleSwipe('left')
-  else if (e.key === 'm' && videoEl.value) {
+  else if ((e.key === 'm' || e.key === '0') && videoEl.value) {
     videoEl.value.muted = !videoEl.value.muted
     isMuted.value = videoEl.value.muted
   }
