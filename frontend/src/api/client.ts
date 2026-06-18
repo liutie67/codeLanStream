@@ -2,8 +2,8 @@ import type {
   BrowseResponse,
   DirectoryListResponse,
   FeedResponse,
+  ImportJobProgress,
   ImportMediaRequest,
-  ImportMediaResponse,
   MediaItem,
   RandomResponse,
 } from './types'
@@ -123,7 +123,7 @@ export async function fetchDirectories(path?: string): Promise<DirectoryListResp
   return res.json()
 }
 
-export async function importMediaFolder(body: ImportMediaRequest): Promise<ImportMediaResponse> {
+export async function importMediaFolder(body: ImportMediaRequest): Promise<ImportJobProgress> {
   const res = await fetch(`${API_BASE}/manage/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -138,6 +138,21 @@ export async function importMediaFolder(body: ImportMediaRequest): Promise<Impor
       message = await res.text() || message
     }
     throw new Error(message || `导入失败: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchImportProgress(jobId: string): Promise<ImportJobProgress> {
+  const res = await fetch(`${API_BASE}/manage/import/${jobId}`)
+  if (!res.ok) {
+    let message = `进度读取失败: ${res.status}`
+    try {
+      const data = await res.json()
+      message = data.detail || message
+    } catch {
+      message = await res.text() || message
+    }
+    throw new Error(message)
   }
   return res.json()
 }

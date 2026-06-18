@@ -1,7 +1,9 @@
+import asyncio
 import os
 import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Callable
 
 from sqlalchemy import delete as sql_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,8 @@ from app.core.config import settings
 from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse, MediaOut
 from app.services.thumbnail import generate_thumbnail, generate_preview
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def _classify_media(ext: str) -> MediaType | None:
@@ -53,6 +57,7 @@ async def scan_directory_stats(
     recursive: bool = True,
     skip_hidden: bool = True,
     backfill_existing: bool = True,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, int | str | bool]:
     path = Path(dir_path).expanduser().resolve()
     if not path.exists():
@@ -73,11 +78,29 @@ async def scan_directory_stats(
         "preview_requested": preview,
     }
 
-    files = path.rglob("*") if recursive else path.iterdir()
-    for file in files:
+    def notify(**payload: Any) -> None:
+        if progress:
+            progress({
+                "stats": stats.copy(),
+                **payload,
+            })
+
+    notify(stage="preparing", message="统计目录文件", current=0, total=0)
+    files = [file for file in (path.rglob("*") if recursive else path.iterdir()) if file.is_file()]
+    total_files = len(files)
+    notify(stage="scanning", message="扫描媒体文件", current=0, total=total_files)
+
+    for index, file in enumerate(files, start=1):
         if not file.is_file():
             continue
         stats["scanned_files"] += 1
+        notify(
+            stage="scanning",
+            message="扫描媒体文件",
+            current=index,
+            total=total_files,
+            current_file=str(file),
+        )
         # Skip hidden files and files in hidden directories
         if skip_hidden and any(part.startswith('.') for part in file.relative_to(path).parts):
             stats["skipped_count"] += 1
@@ -102,7 +125,14 @@ async def scan_directory_stats(
             stats["existing_count"] += 1
             if backfill_existing and media.media_type == MediaType.VIDEO:
                 if not media.thumbnail_path:
-                    media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
+                    notify(
+                        stage="thumbnail",
+                        message="补齐视频首帧",
+                        current=index,
+                        total=total_files,
+                        current_file=str(file),
+                    )
+                    media.thumbnail_path = await asyncio.to_thread(generate_thumbnail, str(file.resolve()), media.id)
                     if media.thumbnail_path:
                         stats["thumbnail_count"] += 1
                 if preview and not media.preview_path:
@@ -120,7 +150,14 @@ async def scan_directory_stats(
         db.add(media)
         await db.flush()
         if media_type == MediaType.VIDEO:
-            media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
+            notify(
+                stage="thumbnail",
+                message="生成视频首帧",
+                current=index,
+                total=total_files,
+                current_file=str(file),
+            )
+            media.thumbnail_path = await asyncio.to_thread(generate_thumbnail, str(file.resolve()), media.id)
             if media.thumbnail_path:
                 stats["thumbnail_count"] += 1
             if preview:
@@ -131,17 +168,33 @@ async def scan_directory_stats(
     if pending_previews:
         n_workers = workers or min(os.cpu_count() or 4, 4)
         print(f"  并行生成 {len(pending_previews)} 个预览图 (workers={n_workers})")
+        notify(stage="preview", message="生成视频预览图", current=0, total=len(pending_previews))
+        loop = asyncio.get_running_loop()
+
+        async def run_preview(pool: ThreadPoolExecutor, video_path: str, media_id: str) -> tuple[str, str | None]:
+            preview_path = await loop.run_in_executor(pool, generate_preview, video_path, media_id)
+            return media_id, preview_path
+
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futures = {
-                pool.submit(generate_preview, vp, mid): mid
-                for vp, mid in pending_previews
-            }
+            tasks = [
+                run_preview(pool, video_path, media_id)
+                for video_path, media_id in pending_previews
+            ]
             results: dict[str, str | None] = {}
-            for future in as_completed(futures):
-                mid = futures[future]
-                results[mid] = future.result()
+            for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
+                mid, preview_path = await task
+                results[mid] = preview_path
+                if preview_path:
+                    stats["preview_count"] += 1
+                notify(
+                    stage="preview",
+                    message="生成视频预览图",
+                    current=completed,
+                    total=len(pending_previews),
+                )
 
         # 批量更新数据库
+        notify(stage="committing", message="写入预览结果", current=len(pending_previews), total=len(pending_previews))
         for mid, preview_path in results.items():
             if preview_path:
                 await db.execute(
@@ -149,9 +202,10 @@ async def scan_directory_stats(
                     .where(Media.id == mid)
                     .values(preview_path=preview_path)
                 )
-                stats["preview_count"] += 1
 
+    notify(stage="committing", message="写入数据库", current=total_files, total=total_files)
     await db.commit()
+    notify(stage="completed", message="导入完成", current=total_files, total=total_files)
     return stats
 
 

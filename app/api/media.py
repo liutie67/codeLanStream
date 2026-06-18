@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.media import MediaType
 from app.schemas.media import FeedResponse
+from app.services.import_jobs import get_import_job, start_import_job
 from app.services.media import (
     batch_update, browse_folders, export_favorites, get_feed, get_media,
     get_mime_type, get_random_media, parse_range, purge_deleted,
-    scan_directory_stats, toggle_deleted, toggle_favorite,
+    toggle_deleted, toggle_favorite,
 )
 
 router = APIRouter(prefix="/api/media", tags=["media"])
@@ -242,19 +243,13 @@ async def list_directories(path: str | None = None):
 
 
 @router.post("/manage/import")
-async def import_media(body: ImportRequest, db: AsyncSession = Depends(get_db)):
-    try:
-        return await scan_directory_stats(
-            body.path,
-            db,
-            preview=body.preview,
-            workers=body.workers,
-            media_type_filter=body.media_type,
-            recursive=body.recursive,
-            skip_hidden=body.skip_hidden,
-            backfill_existing=body.backfill_existing,
-        )
-    except FileNotFoundError:
-        raise HTTPException(404, "Directory not found")
-    except NotADirectoryError:
-        raise HTTPException(400, "Path is not a directory")
+async def import_media(body: ImportRequest):
+    return start_import_job(body.model_dump())
+
+
+@router.get("/manage/import/{job_id}")
+async def import_media_progress(job_id: str):
+    job = get_import_job(job_id)
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    return job

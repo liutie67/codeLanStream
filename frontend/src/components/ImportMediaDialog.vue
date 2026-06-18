@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import type { DirectoryListResponse, ImportMediaResponse, MediaType } from '../api/types'
-import { fetchDirectories, importMediaFolder } from '../api/client'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { DirectoryListResponse, ImportJobProgress, ImportMediaResponse, MediaType } from '../api/types'
+import { fetchDirectories, fetchImportProgress, importMediaFolder } from '../api/client'
 import { useTheme } from '../composables/useTheme'
 
 const emit = defineEmits<{ close: []; imported: [result: ImportMediaResponse] }>()
@@ -13,6 +13,8 @@ const loadingDirs = ref(false)
 const importing = ref(false)
 const error = ref('')
 const result = ref<ImportMediaResponse | null>(null)
+const progress = ref<ImportJobProgress | null>(null)
+let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const preview = ref(false)
 const mediaType = ref<MediaType | 'all'>('all')
@@ -28,6 +30,20 @@ const typeOptions: { value: MediaType | 'all'; label: string }[] = [
 ]
 
 const canImport = computed(() => path.value.trim().length > 0 && !importing.value)
+const progressStats = computed(() => progress.value?.stats || result.value)
+const stageLabel = computed(() => {
+  switch (progress.value?.stage) {
+    case 'queued': return '等待开始'
+    case 'preparing': return '准备导入'
+    case 'scanning': return '扫描文件'
+    case 'thumbnail': return '处理首帧'
+    case 'preview': return '生成预览'
+    case 'committing': return '写入数据库'
+    case 'completed': return '导入完成'
+    case 'failed': return '导入失败'
+    default: return '未开始'
+  }
+})
 
 async function loadDirectory(target?: string) {
   loadingDirs.value = true
@@ -45,11 +61,13 @@ async function loadDirectory(target?: string) {
 
 async function submit() {
   if (!canImport.value) return
+  stopPolling()
   importing.value = true
   error.value = ''
   result.value = null
+  progress.value = null
   try {
-    const res = await importMediaFolder({
+    const job = await importMediaFolder({
       path: path.value.trim(),
       preview: preview.value,
       media_type: mediaType.value === 'all' ? null : mediaType.value,
@@ -58,16 +76,50 @@ async function submit() {
       backfill_existing: backfillExisting.value,
       workers: preview.value ? workers.value : null,
     })
-    result.value = res
-    emit('imported', res)
+    progress.value = job
+    startPolling(job.id)
   } catch (e: any) {
     error.value = e.message || '导入失败'
-  } finally {
     importing.value = false
   }
 }
 
+function startPolling(jobId: string) {
+  pollProgress(jobId)
+  pollTimer = setInterval(() => pollProgress(jobId), 800)
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function pollProgress(jobId: string) {
+  try {
+    const res = await fetchImportProgress(jobId)
+    progress.value = res
+    if (res.status === 'completed') {
+      stopPolling()
+      result.value = res.stats
+      importing.value = false
+      emit('imported', res.stats)
+    } else if (res.status === 'failed') {
+      stopPolling()
+      importing.value = false
+      error.value = res.error || '导入失败'
+    }
+  } catch (e: any) {
+    stopPolling()
+    importing.value = false
+    error.value = e.message || '进度读取失败'
+  } finally {
+  }
+}
+
 onMounted(() => loadDirectory())
+onUnmounted(stopPolling)
 </script>
 
 <template>
@@ -99,15 +151,16 @@ onMounted(() => loadDirectory())
           <div class="flex flex-col md:flex-row gap-2">
             <input
               v-model="path"
+              :disabled="importing"
               :class="[
-                'flex-1 min-w-0 px-3 py-2 rounded-lg border text-sm font-mono',
+                'flex-1 min-w-0 px-3 py-2 rounded-lg border text-sm font-mono disabled:opacity-60',
                 isDark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900',
               ]"
               placeholder="/path/to/media"
             />
             <button
               @click="loadDirectory(path)"
-              :disabled="loadingDirs || !path.trim()"
+              :disabled="loadingDirs || importing || !path.trim()"
               :class="[
                 'h-10 px-3 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
                 isDark ? 'border-gray-700 bg-gray-800 hover:bg-gray-700' : 'border-gray-300 bg-gray-100 hover:bg-gray-200',
@@ -154,8 +207,9 @@ onMounted(() => loadDirectory())
               <div :class="['inline-flex rounded-full p-0.5', isDark ? 'bg-gray-800' : 'bg-gray-200']">
                 <button
                   @click="preview = false"
+                  :disabled="importing"
                   :class="[
-                    'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-60',
                     !preview ? 'bg-blue-600 text-white' : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
                   ]"
                 >
@@ -163,8 +217,9 @@ onMounted(() => loadDirectory())
                 </button>
                 <button
                   @click="preview = true"
+                  :disabled="importing"
                   :class="[
-                    'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-60',
                     preview ? 'bg-emerald-600 text-white' : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
                   ]"
                 >
@@ -180,8 +235,9 @@ onMounted(() => loadDirectory())
                   v-for="option in typeOptions"
                   :key="option.value"
                   @click="mediaType = option.value"
+                  :disabled="importing"
                   :class="[
-                    'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-60',
                     mediaType === option.value ? 'bg-blue-600 text-white' : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
                   ]"
                 >
@@ -191,15 +247,15 @@ onMounted(() => loadDirectory())
             </div>
 
             <label class="flex items-center gap-2 text-sm">
-              <input v-model="recursive" type="checkbox" class="w-4 h-4 accent-blue-500" />
+              <input v-model="recursive" :disabled="importing" type="checkbox" class="w-4 h-4 accent-blue-500 disabled:opacity-60" />
               <span>递归子目录</span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input v-model="skipHidden" type="checkbox" class="w-4 h-4 accent-blue-500" />
+              <input v-model="skipHidden" :disabled="importing" type="checkbox" class="w-4 h-4 accent-blue-500 disabled:opacity-60" />
               <span>跳过隐藏文件</span>
             </label>
             <label class="flex items-center gap-2 text-sm">
-              <input v-model="backfillExisting" type="checkbox" class="w-4 h-4 accent-blue-500" />
+              <input v-model="backfillExisting" :disabled="importing" type="checkbox" class="w-4 h-4 accent-blue-500 disabled:opacity-60" />
               <span>补齐已有媒体</span>
             </label>
             <label class="flex items-center gap-2 text-sm">
@@ -209,13 +265,63 @@ onMounted(() => loadDirectory())
                 type="number"
                 min="1"
                 max="16"
-                :disabled="!preview"
+                :disabled="!preview || importing"
                 :class="[
                   'w-20 px-2 py-1 rounded border text-sm disabled:opacity-50',
                   isDark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900',
                 ]"
               />
             </label>
+          </div>
+
+          <div
+            v-if="progress"
+            :class="['rounded-lg border p-3 space-y-3', isDark ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-gray-50']"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium truncate">{{ stageLabel }}</p>
+                <p class="text-xs text-gray-500 truncate">{{ progress.message }}</p>
+              </div>
+              <span class="text-sm tabular-nums text-gray-500">{{ progress.percent }}%</span>
+            </div>
+            <div :class="['h-2 rounded-full overflow-hidden', isDark ? 'bg-gray-800' : 'bg-gray-200']">
+              <div
+                class="h-full rounded-full bg-blue-600 transition-all duration-300"
+                :style="{ width: `${progress.percent}%` }"
+              />
+            </div>
+            <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
+              <div>
+                <p class="text-gray-500">阶段</p>
+                <p class="font-medium tabular-nums">
+                  {{ progress.total ? `${progress.current}/${progress.total}` : '-' }}
+                </p>
+              </div>
+              <div>
+                <p class="text-gray-500">已扫描</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.scanned_files || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">新增</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.added_count || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">已有</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.existing_count || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">首帧</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.thumbnail_count || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">预览</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.preview_count || 0 }}</p>
+              </div>
+            </div>
+            <p v-if="progress.current_file" class="text-xs text-gray-500 font-mono truncate">
+              {{ progress.current_file }}
+            </p>
           </div>
 
           <div v-if="error" class="px-3 py-2 rounded-lg bg-red-600/15 text-red-400 text-sm">{{ error }}</div>

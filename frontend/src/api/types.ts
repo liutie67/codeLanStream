@@ -73,3 +73,30 @@ export interface ImportMediaResponse {
   preview_count: number
   preview_requested: boolean
 }
+
+export type ImportJobStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export type ImportJobStage =
+  | 'queued'
+  | 'preparing'
+  | 'scanning'
+  | 'thumbnail'
+  | 'preview'
+  | 'committing'
+  | 'completed'
+  | 'failed'
+
+export interface ImportJobProgress {
+  id: string
+  status: ImportJobStatus
+  stage: ImportJobStage
+  message: string
+  percent: number
+  current: number
+  total: number
+  current_file: string | null
+  stats: ImportMediaResponse
+  error: string | null
+  created_at: string
+  updated_at: string
+}

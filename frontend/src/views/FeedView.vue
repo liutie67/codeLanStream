@@ -215,10 +215,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
     <main class="px-4 lg:px-6 py-4">
       <div
         ref="columnRef"
-        class="flex items-start gap-3"
+        class="flex items-start gap-2"
         :style="colMode === '1' ? 'max-width: 720px; margin: 0 auto' : ''"
       >
-        <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-3">
+        <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-2">
           <MediaCard
             v-for="item in col"
             :key="item.id"

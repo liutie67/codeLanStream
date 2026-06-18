@@ -1,18 +1,14 @@
 <script setup lang="ts">
 import type { MediaItem } from '../api/types'
 import { getStreamUrl, getThumbnailUrl, getPreviewUrl, toggleFavorite, toggleDelete } from '../api/client'
-import { useTheme } from '../composables/useTheme'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 
 const props = defineProps<{ item: MediaItem }>()
 const emit = defineEmits<{ click: [item: MediaItem]; updated: [item: MediaItem] }>()
-const { isDark } = useTheme()
 const { thumbMode } = useThumbnailMode()
 
 function btnInactive() {
-  return isDark.value
-    ? 'bg-black/30 border-white/50 text-white/70 hover:border-white hover:text-white'
-    : 'bg-white/70 border-gray-400/50 text-gray-500 hover:border-gray-600 hover:text-gray-700'
+  return 'bg-black/45 border-white/40 text-white/80 hover:bg-black/65 hover:border-white/70 hover:text-white'
 }
 
 async function onFavorite(e: MouseEvent) {
@@ -29,10 +25,7 @@ async function onDelete(e: MouseEvent) {
 </script>
 
 <template>
-  <div
-    :class="['rounded-xl overflow-hidden cursor-pointer group', isDark ? 'bg-gray-900' : 'bg-gray-100']"
-    @click="emit('click', item)"
-  >
+  <div class="rounded-lg overflow-hidden cursor-pointer group" @click="emit('click', item)">
     <div class="relative">
       <img
         v-if="item.media_type === 'image'"
@@ -80,36 +73,36 @@ async function onDelete(e: MouseEvent) {
           </svg>
         </div>
       </template>
-    </div>
-
-    <!-- 操作按钮 -->
-    <div class="flex justify-end gap-2 px-2 py-2">
-      <button
-        @click="onDelete"
-        :class="[
-          'w-9 h-9 flex items-center justify-center rounded-full border transition-colors',
-          item.is_deleted
-            ? 'bg-red-500/80 border-red-400 text-white'
-            : btnInactive(),
-        ]"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" />
-        </svg>
-      </button>
-      <button
-        @click="onFavorite"
-        :class="[
-          'w-9 h-9 flex items-center justify-center rounded-full border transition-colors',
-          item.is_favorited
-            ? 'bg-yellow-400/80 border-yellow-300 text-white'
-            : btnInactive(),
-        ]"
-      >
-        <svg class="w-4 h-4" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
-        </svg>
-      </button>
+      <div class="absolute right-2 bottom-2 z-10 flex items-center gap-1.5">
+        <button
+          @click="onDelete"
+          :class="[
+            'w-8 h-8 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-sm transition-colors',
+            item.is_deleted
+              ? 'bg-red-500/90 border-red-300 text-white'
+              : btnInactive(),
+          ]"
+          :title="item.is_deleted ? '取消删除' : '标记删除'"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" />
+          </svg>
+        </button>
+        <button
+          @click="onFavorite"
+          :class="[
+            'w-8 h-8 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-sm transition-colors',
+            item.is_favorited
+              ? 'bg-yellow-400/90 border-yellow-200 text-white'
+              : btnInactive(),
+          ]"
+          :title="item.is_favorited ? '取消收藏' : '收藏'"
+        >
+          <svg class="w-3.5 h-3.5" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
