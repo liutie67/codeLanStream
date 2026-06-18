@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
+import { getPreviewUrl, getStreamUrl, getThumbnailUrl } from '../api/client'
 import { useFeed } from '../composables/useFeed'
 import { useColumnLayout } from '../composables/useColumnLayout'
 import { useTheme } from '../composables/useTheme'
@@ -14,6 +15,12 @@ import RoamingView from '../components/RoamingView.vue'
 import TurboView from '../components/TurboView.vue'
 
 type ColumnMode = 'auto' | '1' | '2'
+
+const LOAD_AHEAD_PX = 2800
+const PREFETCH_CONCURRENCY = 6
+const PREFETCH_LOOKBACK = 16
+const PREFETCH_MAX_ITEMS = 120
+const PREFETCH_URL_CACHE_LIMIT = 360
 
 const { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
@@ -32,6 +39,11 @@ const colCount = computed(() => {
 
 const { columns, updateItem } = useColumnLayout(items, colCount)
 const columnRef = ref<HTMLElement>()
+const prefetchedUrls = new Set<string>()
+const prefetchQueue: string[] = []
+let prefetchActive = 0
+let nextPrefetchIndex = 0
+let stopped = false
 
 const thumbModeTitle = computed(() => (
   thumbMode.value === 'grid' ? '当前: 预览，点击切换到首帧' : '当前: 首帧，点击切换到预览'
@@ -55,7 +67,7 @@ function onItemUpdated(updated: MediaItem) {
   updateItem(updated)
 }
 
-function onScroll() {
+async function onScroll() {
   if (loading.value || !hasMore.value || !columnRef.value) return
   const colEls = columnRef.value.children
   let minBottom = Infinity
@@ -63,11 +75,93 @@ function onScroll() {
     const bottom = (col as HTMLElement).getBoundingClientRect().bottom
     if (bottom < minBottom) minBottom = bottom
   }
-  if (minBottom < window.innerHeight + 600) loadMore()
+  if (minBottom < window.innerHeight + LOAD_AHEAD_PX) {
+    await loadMore()
+    requestAnimationFrame(onScroll)
+  }
 }
 
-onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
-onUnmounted(() => window.removeEventListener('scroll', onScroll))
+function getPreloadUrl(item: MediaItem): string | null {
+  if (item.media_type === 'image') return getStreamUrl(item.id)
+  if (thumbMode.value === 'grid' && item.preview_path) return getPreviewUrl(item.id)
+  if (item.thumbnail_path) return getThumbnailUrl(item.id)
+  return null
+}
+
+function rememberPrefetchedUrl(url: string) {
+  prefetchedUrls.add(url)
+  while (prefetchedUrls.size > PREFETCH_URL_CACHE_LIMIT) {
+    const oldest = prefetchedUrls.values().next().value
+    if (!oldest) break
+    prefetchedUrls.delete(oldest)
+  }
+}
+
+function enqueuePreload(url: string) {
+  if (prefetchedUrls.has(url) || prefetchQueue.includes(url)) return
+  rememberPrefetchedUrl(url)
+  prefetchQueue.push(url)
+  pumpPreloadQueue()
+}
+
+function pumpPreloadQueue() {
+  if (stopped) return
+  while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length) {
+    const url = prefetchQueue.shift()
+    if (!url) return
+    prefetchActive++
+    const img = new Image()
+    img.decoding = 'async'
+    img.onload = img.onerror = () => {
+      prefetchActive--
+      pumpPreloadQueue()
+    }
+    img.src = url
+  }
+}
+
+function prefetchAhead(reset = false) {
+  if (reset) {
+    prefetchQueue.length = 0
+    nextPrefetchIndex = 0
+  }
+
+  const start = Math.max(0, nextPrefetchIndex - PREFETCH_LOOKBACK)
+  const end = Math.min(items.value.length, nextPrefetchIndex + PREFETCH_MAX_ITEMS)
+  for (const item of items.value.slice(start, end)) {
+    const url = getPreloadUrl(item)
+    if (url) enqueuePreload(url)
+  }
+  nextPrefetchIndex = Math.max(nextPrefetchIndex, end)
+}
+
+watch(
+  () => items.value.length,
+  (len, oldLen) => {
+    if (len < (oldLen ?? 0)) {
+      prefetchedUrls.clear()
+      prefetchAhead(true)
+      return
+    }
+    prefetchAhead()
+  },
+  { immediate: true },
+)
+
+watch(thumbMode, () => {
+  prefetchedUrls.clear()
+  prefetchAhead(true)
+})
+
+onMounted(() => {
+  window.addEventListener('scroll', onScroll, { passive: true })
+  onScroll()
+})
+onUnmounted(() => {
+  stopped = true
+  prefetchQueue.length = 0
+  window.removeEventListener('scroll', onScroll)
+})
 </script>
 
 <template>

@@ -2,6 +2,8 @@ import { ref } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
 import { fetchRandom } from '../api/client'
 
+const FEED_BATCH_SIZE = 80
+
 export function useFeed() {
   const items = ref<MediaItem[]>([])
   const loading = ref(false)
@@ -14,13 +16,13 @@ export function useFeed() {
     if (loading.value || !hasMore.value) return
     loading.value = true
     try {
-      const res = await fetchRandom(50, [...loadedIds.value], mediaType.value)
+      const res = await fetchRandom(FEED_BATCH_SIZE, [...loadedIds.value], mediaType.value)
       for (const item of res.items) {
         loadedIds.value.add(item.id)
       }
       items.value.push(...res.items)
       total.value = res.total
-      if (res.items.length < 50) hasMore.value = false
+      if (res.items.length < FEED_BATCH_SIZE) hasMore.value = false
     } finally {
       loading.value = false
     }
