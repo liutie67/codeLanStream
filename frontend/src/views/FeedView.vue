@@ -13,6 +13,8 @@ import FolderBrowser from '../components/FolderBrowser.vue'
 import RoamingView from '../components/RoamingView.vue'
 import TurboView from '../components/TurboView.vue'
 
+type ColumnMode = 'auto' | '1' | '2'
+
 const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
 const { thumbMode, toggleMode } = useThumbnailMode()
@@ -20,7 +22,7 @@ const activeItem = ref<MediaItem | null>(null)
 const showFolders = ref(false)
 const showRoaming = ref(false)
 const showTurbo = ref(false)
-const colMode = ref<'auto' | '1' | '2'>('auto')
+const colMode = ref<ColumnMode>('auto')
 
 const colCount = computed(() => {
   if (colMode.value === '1') return 1
@@ -31,15 +33,20 @@ const colCount = computed(() => {
 const { columns, updateItem } = useColumnLayout(items, colCount)
 const columnRef = ref<HTMLElement>()
 
+const thumbModeTitle = computed(() => (
+  thumbMode.value === 'grid' ? '当前: 预览，点击切换到首帧' : '当前: 首帧，点击切换到预览'
+))
+
+const colModeTitle = computed(() => {
+  if (colMode.value === 'auto') return '当前: 自动列数，点击切换到单列'
+  if (colMode.value === '1') return '当前: 单列，点击切换到双列'
+  return '当前: 双列，点击切换到自动'
+})
+
 function cycleColMode() {
-  const modes: ('auto' | '1' | '2')[] = ['auto', '1', '2']
+  const modes: ColumnMode[] = ['auto', '1', '2']
   const idx = modes.indexOf(colMode.value)
   colMode.value = modes[(idx + 1) % modes.length]
-}
-
-const colIcon = () => {
-  const map = { auto: '⊞', '1': '▭', '2': '⊞' }
-  return map[colMode.value]
 }
 
 function onItemUpdated(updated: MediaItem) {
@@ -120,25 +127,85 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
           </button>
           <button
             @click="toggleMode"
-            :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0',
+            :class="[
+              'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
               thumbMode === 'grid'
-                ? 'bg-green-600 text-white'
-                : isDark ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
-            :title="thumbMode === 'grid' ? '切换到首帧缩略图' : '切换到4x4网格预览'"
+                ? 'border-emerald-500 bg-emerald-600 text-white'
+                : isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+            ]"
+            :title="thumbModeTitle"
+            aria-label="切换预览模式"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <rect x="3" y="3" width="7" height="7" />
-              <rect x="14" y="3" width="7" height="7" />
-              <rect x="3" y="14" width="7" height="7" />
-              <rect x="14" y="14" width="7" height="7" />
+            <svg
+              v-if="thumbMode === 'grid'"
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="4" width="6" height="6" rx="1" />
+              <rect x="14" y="4" width="6" height="6" rx="1" />
+              <rect x="4" y="14" width="6" height="6" rx="1" />
+              <rect x="14" y="14" width="6" height="6" rx="1" />
             </svg>
+            <svg
+              v-else
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
+            </svg>
+            <span class="hidden md:inline">{{ thumbMode === 'grid' ? '预览' : '首帧' }}</span>
           </button>
           <button
             @click="cycleColMode"
-            :class="['w-7 h-7 flex items-center justify-center rounded-full text-sm transition-colors shrink-0', isDark ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
-            :title="colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列'"
+            :class="[
+              'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+              isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+            ]"
+            :title="colModeTitle"
+            aria-label="切换列布局"
           >
-            {{ colIcon() }}
+            <svg
+              v-if="colMode === 'auto'"
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="4" width="7" height="7" rx="1" />
+              <rect x="13" y="4" width="7" height="5" rx="1" />
+              <rect x="4" y="13" width="7" height="7" rx="1" />
+              <rect x="13" y="11" width="7" height="9" rx="1" />
+            </svg>
+            <svg
+              v-else-if="colMode === '1'"
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="7" y="4" width="10" height="16" rx="2" />
+            </svg>
+            <svg
+              v-else
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="4" width="7" height="16" rx="2" />
+              <rect x="13" y="4" width="7" height="16" rx="2" />
+            </svg>
+            <span class="hidden md:inline">{{ colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列' }}</span>
           </button>
           <TypeFilter :current="mediaType" @change="setMediaType" />
         </div>

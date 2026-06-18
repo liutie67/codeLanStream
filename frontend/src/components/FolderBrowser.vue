@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import type { BrowseRoot, MediaItem, MediaType } from '../api/types'
 import { fetchBrowse } from '../api/client'
 import { useTheme } from '../composables/useTheme'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import MediaCard from './MediaCard.vue'
 
+type ColumnMode = 'auto' | '1' | '2'
+
 const emit = defineEmits<{ close: []; play: [item: MediaItem] }>()
 const { isDark } = useTheme()
+const { thumbMode, toggleMode } = useThumbnailMode()
 
 const roots = ref<BrowseRoot[]>([])
 const currentPath = ref<string[]>([])
@@ -17,23 +21,32 @@ const items = ref<MediaItem[]>([])
 const loading = ref(false)
 const showRoots = ref(true)
 const mediaType = ref<MediaType | null>(null)
-const colMode = ref<'auto' | '1' | '2'>('auto')
+const colMode = ref<ColumnMode>('auto')
 
-function getColClass() {
-  if (colMode.value === '1') return 'masonry masonry-1'
-  if (colMode.value === '2') return 'masonry masonry-2'
-  return 'masonry'
-}
+const thumbModeTitle = computed(() => (
+  thumbMode.value === 'grid' ? '当前: 预览，点击切换到首帧' : '当前: 首帧，点击切换到预览'
+))
+
+const colCount = computed(() => {
+  if (colMode.value === '1') return 1
+  if (colMode.value === '2') return 2
+  return 4
+})
+
+const columns = computed(() => {
+  const cols: MediaItem[][] = Array.from({ length: colCount.value }, () => [])
+  for (const item of items.value) {
+    const shortest = cols.reduce((min, col, i) =>
+      col.length < cols[min].length ? i : min, 0)
+    cols[shortest].push(item)
+  }
+  return cols
+})
 
 function cycleColMode() {
-  const modes: ('auto' | '1' | '2')[] = ['auto', '1', '2']
+  const modes: ColumnMode[] = ['auto', '1', '2']
   const idx = modes.indexOf(colMode.value)
   colMode.value = modes[(idx + 1) % modes.length]
-}
-
-const colIcon = () => {
-  const map = { auto: '⊞', '1': '▭', '2': '⊞' }
-  return map[colMode.value]
 }
 
 function setMediaType(type: MediaType | null) {
@@ -112,10 +125,87 @@ function onItemUpdated(updated: MediaItem) {
           <div v-if="!showRoots" class="flex items-center gap-2 shrink-0">
             <span class="text-xs text-gray-500 tabular-nums">{{ items.length }}</span>
             <button
+              @click="toggleMode"
+              :class="[
+                'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+                thumbMode === 'grid'
+                  ? 'border-emerald-500 bg-emerald-600 text-white'
+                  : isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+              ]"
+              :title="thumbModeTitle"
+              aria-label="切换预览模式"
+            >
+              <svg
+                v-if="thumbMode === 'grid'"
+                class="w-4 h-4 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <rect x="4" y="4" width="6" height="6" rx="1" />
+                <rect x="14" y="4" width="6" height="6" rx="1" />
+                <rect x="4" y="14" width="6" height="6" rx="1" />
+                <rect x="14" y="14" width="6" height="6" rx="1" />
+              </svg>
+              <svg
+                v-else
+                class="w-4 h-4 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <rect x="4" y="5" width="16" height="14" rx="2" />
+                <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
+              </svg>
+              <span class="hidden md:inline">{{ thumbMode === 'grid' ? '预览' : '首帧' }}</span>
+            </button>
+            <button
               @click="cycleColMode"
-              :class="['w-7 h-7 flex items-center justify-center rounded-full text-sm transition-colors shrink-0', isDark ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
-              :title="colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列'"
-            >{{ colIcon() }}</button>
+              :class="[
+                'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+                isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+              ]"
+              :title="colMode === 'auto' ? '当前: 自动列数，点击切换到单列' : colMode === '1' ? '当前: 单列，点击切换到双列' : '当前: 双列，点击切换到自动'"
+              aria-label="切换列布局"
+            >
+              <svg
+                v-if="colMode === 'auto'"
+                class="w-4 h-4 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <rect x="4" y="4" width="7" height="7" rx="1" />
+                <rect x="13" y="4" width="7" height="5" rx="1" />
+                <rect x="4" y="13" width="7" height="7" rx="1" />
+                <rect x="13" y="11" width="7" height="9" rx="1" />
+              </svg>
+              <svg
+                v-else-if="colMode === '1'"
+                class="w-4 h-4 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <rect x="7" y="4" width="10" height="16" rx="2" />
+              </svg>
+              <svg
+                v-else
+                class="w-4 h-4 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <rect x="4" y="4" width="7" height="16" rx="2" />
+                <rect x="13" y="4" width="7" height="16" rx="2" />
+              </svg>
+              <span class="hidden md:inline">{{ colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列' }}</span>
+            </button>
             <TypeFilter :current="mediaType" @change="setMediaType" />
           </div>
         </div>
@@ -154,14 +244,20 @@ function onItemUpdated(updated: MediaItem) {
             </button>
           </div>
 
-          <div v-if="items.length" :class="getColClass()">
-            <MediaCard
-              v-for="item in items"
-              :key="item.id"
-              :item="item"
-              @click="emit('play', $event)"
-              @updated="onItemUpdated"
-            />
+          <div
+            v-if="items.length"
+            class="flex items-start gap-3"
+            :style="colMode === '1' ? 'max-width: 720px; margin: 0 auto' : ''"
+          >
+            <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-3">
+              <MediaCard
+                v-for="item in col"
+                :key="item.id"
+                :item="item"
+                @click="emit('play', $event)"
+                @updated="onItemUpdated"
+              />
+            </div>
           </div>
           <div v-else-if="!folders.length" class="py-12 text-center text-gray-500">此目录无媒体文件</div>
         </template>

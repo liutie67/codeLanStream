@@ -206,9 +206,16 @@ onUnmounted(() => {
       <div class="flex items-center gap-3">
         <button
           @click="cycleColMode"
-          class="px-3 py-1 rounded-full text-xs bg-white/10 text-white/70 hover:text-white transition-colors"
+          class="h-8 w-8 md:w-auto md:px-3 flex items-center justify-center gap-1 rounded-full border border-white/10 bg-white/10 text-xs font-medium text-white/75 shadow-sm transition-colors hover:text-white shrink-0"
+          :title="`当前: ${colMode} 列，点击切换列数`"
+          aria-label="切换列数"
         >
-          {{ colMode }} 列
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="4" y="5" width="4" height="14" rx="1" />
+            <rect x="10" y="5" width="4" height="14" rx="1" />
+            <rect x="16" y="5" width="4" height="14" rx="1" />
+          </svg>
+          <span class="hidden md:inline">{{ colMode }} 列</span>
         </button>
         <button
           @click="exitTurbo"
