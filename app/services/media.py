@@ -26,23 +26,72 @@ async def scan_directory(
     db: AsyncSession,
     preview: bool = False,
     workers: int | None = None,
+    media_type_filter: MediaType | None = None,
+    recursive: bool = True,
+    skip_hidden: bool = True,
+    backfill_existing: bool = True,
 ) -> int:
-    count = 0
-    path = Path(dir_path).resolve()
+    stats = await scan_directory_stats(
+        dir_path,
+        db,
+        preview=preview,
+        workers=workers,
+        media_type_filter=media_type_filter,
+        recursive=recursive,
+        skip_hidden=skip_hidden,
+        backfill_existing=backfill_existing,
+    )
+    return stats["added_count"] + stats["preview_count"]
+
+
+async def scan_directory_stats(
+    dir_path: str,
+    db: AsyncSession,
+    preview: bool = False,
+    workers: int | None = None,
+    media_type_filter: MediaType | None = None,
+    recursive: bool = True,
+    skip_hidden: bool = True,
+    backfill_existing: bool = True,
+) -> dict[str, int | str | bool]:
+    path = Path(dir_path).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Directory not found: {dir_path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"Path is not a directory: {dir_path}")
+
     root = str(path)
     pending_previews: list[tuple[str, str]] = []  # (video_path, media_id)
+    stats: dict[str, int | str | bool] = {
+        "root_dir": root,
+        "scanned_files": 0,
+        "added_count": 0,
+        "existing_count": 0,
+        "skipped_count": 0,
+        "thumbnail_count": 0,
+        "preview_count": 0,
+        "preview_requested": preview,
+    }
 
-    for file in path.rglob("*"):
+    files = path.rglob("*") if recursive else path.iterdir()
+    for file in files:
         if not file.is_file():
             continue
+        stats["scanned_files"] += 1
         # Skip hidden files and files in hidden directories
-        if any(part.startswith('.') for part in file.relative_to(path).parts):
+        if skip_hidden and any(part.startswith('.') for part in file.relative_to(path).parts):
+            stats["skipped_count"] += 1
             continue
         # Skip common system files
         if file.name in ('Thumbs.db', 'desktop.ini', 'Desktop.ini'):
+            stats["skipped_count"] += 1
             continue
         media_type = _classify_media(file.suffix)
         if media_type is None:
+            stats["skipped_count"] += 1
+            continue
+        if media_type_filter and media_type != media_type_filter:
+            stats["skipped_count"] += 1
             continue
 
         existing = await db.execute(
@@ -50,8 +99,14 @@ async def scan_directory(
         )
         media = existing.scalar_one_or_none()
         if media:
-            if preview and media.media_type == MediaType.VIDEO and not media.preview_path:
-                pending_previews.append((str(file.resolve()), media.id))
+            stats["existing_count"] += 1
+            if backfill_existing and media.media_type == MediaType.VIDEO:
+                if not media.thumbnail_path:
+                    media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
+                    if media.thumbnail_path:
+                        stats["thumbnail_count"] += 1
+                if preview and not media.preview_path:
+                    pending_previews.append((str(file.resolve()), media.id))
             continue
 
         stat = file.stat()
@@ -66,9 +121,11 @@ async def scan_directory(
         await db.flush()
         if media_type == MediaType.VIDEO:
             media.thumbnail_path = generate_thumbnail(str(file.resolve()), media.id)
+            if media.thumbnail_path:
+                stats["thumbnail_count"] += 1
             if preview:
                 pending_previews.append((str(file.resolve()), media.id))
-        count += 1
+        stats["added_count"] += 1
 
     # 并行生成预览图
     if pending_previews:
@@ -92,10 +149,10 @@ async def scan_directory(
                     .where(Media.id == mid)
                     .values(preview_path=preview_path)
                 )
-                count += 1
+                stats["preview_count"] += 1
 
     await db.commit()
-    return count
+    return stats
 
 
 async def get_feed(

@@ -1,8 +1,9 @@
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -11,7 +12,7 @@ from app.schemas.media import FeedResponse
 from app.services.media import (
     batch_update, browse_folders, export_favorites, get_feed, get_media,
     get_mime_type, get_random_media, parse_range, purge_deleted,
-    toggle_deleted, toggle_favorite,
+    scan_directory_stats, toggle_deleted, toggle_favorite,
 )
 
 router = APIRouter(prefix="/api/media", tags=["media"])
@@ -179,6 +180,16 @@ class BatchRequest(BaseModel):
     action: str  # favorite, unfavorite, delete, undelete
 
 
+class ImportRequest(BaseModel):
+    path: str
+    preview: bool = False
+    media_type: MediaType | None = None
+    recursive: bool = True
+    skip_hidden: bool = True
+    backfill_existing: bool = True
+    workers: int | None = Field(default=None, ge=1, le=16)
+
+
 @router.post("/manage/purge")
 async def purge(db: AsyncSession = Depends(get_db)):
     count = await purge_deleted(db)
@@ -195,3 +206,55 @@ async def export_fav(body: ExportRequest, db: AsyncSession = Depends(get_db)):
 async def batch(body: BatchRequest, db: AsyncSession = Depends(get_db)):
     count = await batch_update(db, body.ids, body.action)
     return {"updated_count": count}
+
+
+@router.get("/manage/directories")
+async def list_directories(path: str | None = None):
+    target = Path(path).expanduser().resolve() if path else Path.home().resolve()
+    if not target.exists():
+        raise HTTPException(404, "Directory not found")
+    if not target.is_dir():
+        raise HTTPException(400, "Path is not a directory")
+
+    directories = []
+    try:
+        children = list(target.iterdir())
+    except PermissionError:
+        raise HTTPException(403, "Permission denied")
+
+    for child in children:
+        try:
+            if child.is_dir():
+                directories.append({
+                    "name": child.name,
+                    "path": str(child.resolve()),
+                })
+        except OSError:
+            continue
+
+    directories.sort(key=lambda item: item["name"].lower())
+    parent = str(target.parent) if target.parent != target else None
+    return {
+        "path": str(target),
+        "parent": parent,
+        "directories": directories,
+    }
+
+
+@router.post("/manage/import")
+async def import_media(body: ImportRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        return await scan_directory_stats(
+            body.path,
+            db,
+            preview=body.preview,
+            workers=body.workers,
+            media_type_filter=body.media_type,
+            recursive=body.recursive,
+            skip_hidden=body.skip_hidden,
+            backfill_existing=body.backfill_existing,
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, "Directory not found")
+    except NotADirectoryError:
+        raise HTTPException(400, "Path is not a directory")

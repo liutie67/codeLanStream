@@ -6,10 +6,16 @@ import { useTheme } from '../composables/useTheme'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import MediaCard from './MediaCard.vue'
+import ImportMediaDialog from './ImportMediaDialog.vue'
+import type { ImportMediaResponse } from '../api/types'
 
 type ColumnMode = 'auto' | '1' | '2'
 
-const emit = defineEmits<{ close: []; play: [item: MediaItem] }>()
+const emit = defineEmits<{
+  close: []
+  play: [item: MediaItem]
+  imported: [result: ImportMediaResponse]
+}>()
 const { isDark } = useTheme()
 const { thumbMode, toggleMode } = useThumbnailMode()
 
@@ -20,6 +26,7 @@ const folders = ref<string[]>([])
 const items = ref<MediaItem[]>([])
 const loading = ref(false)
 const showRoots = ref(true)
+const showImport = ref(false)
 const mediaType = ref<MediaType | null>(null)
 const colMode = ref<ColumnMode>('auto')
 
@@ -102,6 +109,12 @@ function onItemUpdated(updated: MediaItem) {
   const idx = items.value.findIndex(i => i.id === updated.id)
   if (idx !== -1) items.value[idx] = updated
 }
+
+async function onImported(_result: ImportMediaResponse) {
+  if (showRoots.value) await loadRoots()
+  else await loadFolder()
+  emit('imported', _result)
+}
 </script>
 
 <template>
@@ -122,91 +135,108 @@ function onItemUpdated(updated: MediaItem) {
               </template>
             </nav>
           </div>
-          <div v-if="!showRoots" class="flex items-center gap-2 shrink-0">
-            <span class="text-xs text-gray-500 tabular-nums">{{ items.length }}</span>
+          <div class="flex items-center gap-2 shrink-0">
             <button
-              @click="toggleMode"
+              @click="showImport = true"
               :class="[
                 'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
-                thumbMode === 'grid'
-                  ? 'border-emerald-500 bg-emerald-600 text-white'
-                  : isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+                isDark ? 'border-gray-700 bg-gray-800 text-emerald-400 hover:text-emerald-300' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
               ]"
-              :title="thumbModeTitle"
-              aria-label="切换预览模式"
+              title="导入媒体"
+              aria-label="导入媒体"
             >
-              <svg
-                v-if="thumbMode === 'grid'"
-                class="w-4 h-4 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
-              >
-                <rect x="4" y="4" width="6" height="6" rx="1" />
-                <rect x="14" y="4" width="6" height="6" rx="1" />
-                <rect x="4" y="14" width="6" height="6" rx="1" />
-                <rect x="14" y="14" width="6" height="6" rx="1" />
+              <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M12 5v10m0 0l-4-4m4 4l4-4" />
+                <path d="M5 19h14" />
               </svg>
-              <svg
-                v-else
-                class="w-4 h-4 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
-              >
-                <rect x="4" y="5" width="16" height="14" rx="2" />
-                <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
-              </svg>
-              <span class="hidden md:inline">{{ thumbMode === 'grid' ? '预览' : '首帧' }}</span>
+              <span class="hidden md:inline">导入</span>
             </button>
-            <button
-              @click="cycleColMode"
-              :class="[
-                'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
-                isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
-              ]"
-              :title="colMode === 'auto' ? '当前: 自动列数，点击切换到单列' : colMode === '1' ? '当前: 单列，点击切换到双列' : '当前: 双列，点击切换到自动'"
-              aria-label="切换列布局"
-            >
-              <svg
-                v-if="colMode === 'auto'"
-                class="w-4 h-4 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
+            <template v-if="!showRoots">
+              <span class="text-xs text-gray-500 tabular-nums">{{ items.length }}</span>
+              <button
+                @click="toggleMode"
+                :class="[
+                  'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+                  thumbMode === 'grid'
+                    ? 'border-emerald-500 bg-emerald-600 text-white'
+                    : isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+                ]"
+                :title="thumbModeTitle"
+                aria-label="切换预览模式"
               >
-                <rect x="4" y="4" width="7" height="7" rx="1" />
-                <rect x="13" y="4" width="7" height="5" rx="1" />
-                <rect x="4" y="13" width="7" height="7" rx="1" />
-                <rect x="13" y="11" width="7" height="9" rx="1" />
-              </svg>
-              <svg
-                v-else-if="colMode === '1'"
-                class="w-4 h-4 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
+                <svg
+                  v-if="thumbMode === 'grid'"
+                  class="w-4 h-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="4" y="4" width="6" height="6" rx="1" />
+                  <rect x="14" y="4" width="6" height="6" rx="1" />
+                  <rect x="4" y="14" width="6" height="6" rx="1" />
+                  <rect x="14" y="14" width="6" height="6" rx="1" />
+                </svg>
+                <svg
+                  v-else
+                  class="w-4 h-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="4" y="5" width="16" height="14" rx="2" />
+                  <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
+                </svg>
+                <span class="hidden md:inline">{{ thumbMode === 'grid' ? '预览' : '首帧' }}</span>
+              </button>
+              <button
+                @click="cycleColMode"
+                :class="[
+                  'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+                  isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+                ]"
+                :title="colMode === 'auto' ? '当前: 自动列数，点击切换到单列' : colMode === '1' ? '当前: 单列，点击切换到双列' : '当前: 双列，点击切换到自动'"
+                aria-label="切换列布局"
               >
-                <rect x="7" y="4" width="10" height="16" rx="2" />
-              </svg>
-              <svg
-                v-else
-                class="w-4 h-4 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
-              >
-                <rect x="4" y="4" width="7" height="16" rx="2" />
-                <rect x="13" y="4" width="7" height="16" rx="2" />
-              </svg>
-              <span class="hidden md:inline">{{ colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列' }}</span>
-            </button>
-            <TypeFilter :current="mediaType" @change="setMediaType" />
+                <svg
+                  v-if="colMode === 'auto'"
+                  class="w-4 h-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="4" y="4" width="7" height="7" rx="1" />
+                  <rect x="13" y="4" width="7" height="5" rx="1" />
+                  <rect x="4" y="13" width="7" height="7" rx="1" />
+                  <rect x="13" y="11" width="7" height="9" rx="1" />
+                </svg>
+                <svg
+                  v-else-if="colMode === '1'"
+                  class="w-4 h-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="7" y="4" width="10" height="16" rx="2" />
+                </svg>
+                <svg
+                  v-else
+                  class="w-4 h-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="4" y="4" width="7" height="16" rx="2" />
+                  <rect x="13" y="4" width="7" height="16" rx="2" />
+                </svg>
+                <span class="hidden md:inline">{{ colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列' }}</span>
+              </button>
+              <TypeFilter :current="mediaType" @change="setMediaType" />
+            </template>
           </div>
         </div>
       </header>
@@ -262,6 +292,11 @@ function onItemUpdated(updated: MediaItem) {
           <div v-else-if="!folders.length" class="py-12 text-center text-gray-500">此目录无媒体文件</div>
         </template>
       </main>
+      <ImportMediaDialog
+        v-if="showImport"
+        @close="showImport = false"
+        @imported="onImported"
+      />
     </div>
   </div>
 </template>

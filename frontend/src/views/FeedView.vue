@@ -15,7 +15,7 @@ import TurboView from '../components/TurboView.vue'
 
 type ColumnMode = 'auto' | '1' | '2'
 
-const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
+const { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
 const { thumbMode, toggleMode } = useThumbnailMode()
 const activeItem = ref<MediaItem | null>(null)
@@ -239,6 +239,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
       v-if="showFolders"
       @close="showFolders = false"
       @play="activeItem = $event"
+      @imported="refresh"
     />
     <RoamingView
       v-if="showRoaming"

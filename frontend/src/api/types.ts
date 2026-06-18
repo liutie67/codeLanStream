@@ -41,3 +41,35 @@ export interface BrowseResponse {
   folders: string[]
   items: MediaItem[]
 }
+
+export interface DirectoryEntry {
+  name: string
+  path: string
+}
+
+export interface DirectoryListResponse {
+  path: string
+  parent: string | null
+  directories: DirectoryEntry[]
+}
+
+export interface ImportMediaRequest {
+  path: string
+  preview: boolean
+  media_type?: MediaType | null
+  recursive: boolean
+  skip_hidden: boolean
+  backfill_existing: boolean
+  workers?: number | null
+}
+
+export interface ImportMediaResponse {
+  root_dir: string
+  scanned_files: number
+  added_count: number
+  existing_count: number
+  skipped_count: number
+  thumbnail_count: number
+  preview_count: number
+  preview_requested: boolean
+}

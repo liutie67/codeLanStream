@@ -1,4 +1,12 @@
-import type { BrowseResponse, FeedResponse, MediaItem, RandomResponse } from './types'
+import type {
+  BrowseResponse,
+  DirectoryListResponse,
+  FeedResponse,
+  ImportMediaRequest,
+  ImportMediaResponse,
+  MediaItem,
+  RandomResponse,
+} from './types'
 
 const API_BASE = '/api/media'
 
@@ -95,5 +103,41 @@ export async function batchUpdate(ids: string[], action: string): Promise<{ upda
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids, action }),
   })
+  return res.json()
+}
+
+export async function fetchDirectories(path?: string): Promise<DirectoryListResponse> {
+  const search = new URLSearchParams()
+  if (path) search.set('path', path)
+  const res = await fetch(`${API_BASE}/manage/directories?${search}`)
+  if (!res.ok) {
+    let message = `目录读取失败: ${res.status}`
+    try {
+      const data = await res.json()
+      message = data.detail || message
+    } catch {
+      message = await res.text() || message
+    }
+    throw new Error(message)
+  }
+  return res.json()
+}
+
+export async function importMediaFolder(body: ImportMediaRequest): Promise<ImportMediaResponse> {
+  const res = await fetch(`${API_BASE}/manage/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let message = `导入失败: ${res.status}`
+    try {
+      const data = await res.json()
+      message = data.detail || message
+    } catch {
+      message = await res.text() || message
+    }
+    throw new Error(message || `导入失败: ${res.status}`)
+  }
   return res.json()
 }

@@ -26,15 +26,19 @@ export function useFeed() {
     }
   }
 
-  function setMediaType(type: MediaType | null) {
-    mediaType.value = type
+  async function refresh() {
     items.value = []
     loadedIds.value = new Set()
     hasMore.value = true
-    loadMore()
+    await loadMore()
+  }
+
+  function setMediaType(type: MediaType | null) {
+    mediaType.value = type
+    refresh()
   }
 
   loadMore()
 
-  return { items, loading, hasMore, total, mediaType, loadMore, setMediaType }
+  return { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType }
 }
