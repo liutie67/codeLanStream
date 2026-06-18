@@ -20,6 +20,7 @@ const loading = ref(false)
 const hasMore = ref(true)
 const isLocked = ref(false)
 const PRELOAD_COUNT = 3
+const PRELOAD_RETAIN_BEFORE = 1
 
 // Phase: 'idle' = CSS transitions on, 'dragging' = no transitions, 'animating' = transitions on
 const phase = ref<'idle' | 'dragging' | 'animating'>('idle')
@@ -35,9 +36,13 @@ const isDesktop = !('ontouchstart' in window)
 const current = computed(() => items.value[currentIndex.value])
 const prevItem = computed(() => currentIndex.value > 0 ? items.value[currentIndex.value - 1] : null)
 const nextItem = computed(() => currentIndex.value < items.value.length - 1 ? items.value[currentIndex.value + 1] : null)
+const preloadWindowItems = computed(() => {
+  const start = currentIndex.value + 1
+  return items.value.slice(start, start + PRELOAD_COUNT)
+})
 const preloadItems = computed(() => {
   const start = currentIndex.value + 2
-  const end = Math.min(start + PRELOAD_COUNT, items.value.length)
+  const end = Math.min(currentIndex.value + 1 + PRELOAD_COUNT, items.value.length)
   return items.value.slice(start, end).map((item, i) => ({
     item,
     offset: start + i,
@@ -46,6 +51,93 @@ const preloadItems = computed(() => {
 const containerRef = ref<HTMLElement>()
 
 const hasTransition = computed(() => phase.value !== 'dragging')
+
+interface PreloadEntry {
+  preview?: HTMLImageElement
+  video?: HTMLVideoElement
+}
+
+const preloadedMedia = new Map<string, PreloadEntry>()
+let preloadVersion = 0
+
+function ensurePreloadEntry(item: MediaItem): PreloadEntry {
+  let entry = preloadedMedia.get(item.id)
+  if (!entry) {
+    entry = {}
+    preloadedMedia.set(item.id, entry)
+  }
+  return entry
+}
+
+function preloadVideoItem(item: MediaItem) {
+  if (item.media_type !== 'video') return
+
+  const entry = ensurePreloadEntry(item)
+
+  if (item.preview_path && !entry.preview) {
+    const preview = new Image()
+    preview.decoding = 'async'
+    preview.src = getPreviewUrl(item.id)
+    entry.preview = preview
+  }
+
+  if (!entry.video) {
+    const video = document.createElement('video')
+    video.preload = 'auto'
+    video.muted = true
+    video.playsInline = true
+    video.setAttribute('playsinline', 'true')
+    video.src = getStreamUrl(item.id)
+    video.load()
+    entry.video = video
+  }
+}
+
+function releasePreloadEntry(entry: PreloadEntry) {
+  if (entry.video) {
+    entry.video.pause()
+    entry.video.removeAttribute('src')
+    entry.video.load()
+  }
+  entry.preview?.removeAttribute('src')
+}
+
+function clearPreloadCache() {
+  preloadVersion++
+  for (const entry of preloadedMedia.values()) releasePreloadEntry(entry)
+  preloadedMedia.clear()
+}
+
+function prunePreloadCache(retainedIds: Set<string>) {
+  for (const [id, entry] of preloadedMedia.entries()) {
+    if (!retainedIds.has(id)) {
+      releasePreloadEntry(entry)
+      preloadedMedia.delete(id)
+    }
+  }
+}
+
+function schedulePreload() {
+  const version = ++preloadVersion
+  window.setTimeout(() => {
+    if (version !== preloadVersion) return
+
+    const retainedIds = new Set<string>()
+    const retainStart = Math.max(0, currentIndex.value - PRELOAD_RETAIN_BEFORE)
+    for (let i = retainStart; i < currentIndex.value; i++) {
+      const item = items.value[i]
+      if (item?.media_type === 'video') retainedIds.add(item.id)
+    }
+
+    for (const item of preloadWindowItems.value) {
+      if (item.media_type !== 'video') continue
+      retainedIds.add(item.id)
+      preloadVideoItem(item)
+    }
+
+    prunePreloadCache(retainedIds)
+  }, 0)
+}
 
 const { attach, detach } = useSwipe(containerRef, {
   onSwipe: handleSwipe,
@@ -156,6 +248,7 @@ async function loadMore() {
     for (const item of res.items) loadedIds.value.add(item.id)
     items.value.push(...res.items)
     if (res.items.length < 20) hasMore.value = false
+    schedulePreload()
   } finally {
     loading.value = false
   }
@@ -163,6 +256,7 @@ async function loadMore() {
 
 function toggleHideMarked() {
   hideMarked.value = !hideMarked.value
+  clearPreloadCache()
   items.value = []
   loadedIds.value = new Set()
   currentIndex.value = 0
@@ -172,6 +266,7 @@ function toggleHideMarked() {
 
 function setMediaType(type: MediaType | null) {
   mediaType.value = type
+  clearPreloadCache()
   items.value = []
   loadedIds.value = new Set()
   currentIndex.value = 0
@@ -210,6 +305,7 @@ watch(current, async () => {
     }
   }
   if (currentIndex.value >= items.value.length - 8) loadMore()
+  schedulePreload()
 })
 
 function onVolumeChange() {
@@ -254,6 +350,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   detach()
+  clearPreloadCache()
   window.removeEventListener('keydown', onKeydown)
 })
 </script>
@@ -338,6 +435,7 @@ onUnmounted(() => {
           v-else
           ref="videoEl"
           :src="getStreamUrl(current.id)"
+          preload="auto"
           muted
           loop
           playsinline
@@ -389,6 +487,7 @@ onUnmounted(() => {
         <video
           v-else
           :src="getStreamUrl(nextItem.id)"
+          preload="auto"
           muted
           playsinline
           class="max-w-full max-h-full rounded-lg"
@@ -410,14 +509,6 @@ onUnmounted(() => {
           v-if="item.media_type === 'image'"
           :src="getStreamUrl(item.id)"
           class="max-w-full max-h-full object-contain rounded-lg"
-        />
-        <video
-          v-else
-          :src="getStreamUrl(item.id)"
-          preload="auto"
-          muted
-          playsinline
-          class="max-w-full max-h-full rounded-lg"
         />
       </div>
 
