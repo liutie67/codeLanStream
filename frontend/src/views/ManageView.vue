@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import type { MediaItem } from '../api/types'
-import { fetchFeed, getThumbnailUrl, getStreamUrl, getPreviewUrl, purgeDeleted, exportFavorites, batchUpdate, toggleFavorite, toggleDelete } from '../api/client'
+import type { ExportTag, MediaItem } from '../api/types'
+import { fetchFeed, getThumbnailUrl, getStreamUrl, getPreviewUrl, purgeDeleted, exportMedia, batchUpdate, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useTheme } from '../composables/useTheme'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import VideoProgress from '../components/VideoProgress.vue'
@@ -15,21 +15,31 @@ const { thumbMode } = useThumbnailMode()
 const items = ref<MediaItem[]>([])
 const filterFav = ref(false)
 const filterDel = ref(false)
+const filterDamaged = ref(false)
 const selected = ref<Set<string>>(new Set())
 const exportDir = ref('')
+const exportTags = ref<ExportTag[]>(['favorited'])
+const showExportOptions = ref(false)
 const message = ref('')
 const loading = ref(false)
 const hasMore = ref(true)
 const page = ref(1)
+const currentTotal = ref(0)
 const thumbSize = ref<ThumbSize>('small')
 const previewItem = ref<MediaItem | null>(null)
 const previewVideoEl = ref<HTMLVideoElement | null>(null)
 const previewPaused = ref(true)
-const counts = ref({ all: 0, favorited: 0, deleted: 0, favAndDel: 0 })
+const counts = ref({ all: 0, favorited: 0, deleted: 0, damaged: 0 })
 const sentinelRef = ref<HTMLElement>()
 let observer: IntersectionObserver | null = null
 
 const PAGE_SIZE = 300
+const exportOptions: ExportTag[] = ['favorited', 'deleted', 'damaged']
+const exportLabelMap: Record<ExportTag, string> = {
+  favorited: '已收藏',
+  deleted: '已删除',
+  damaged: '已损坏',
+}
 
 const thumbClasses = computed(() => {
   switch (thumbSize.value) {
@@ -47,6 +57,12 @@ const thumbSizeLabel = computed(() => {
   }
 })
 
+const exportSelectionLabel = computed(() => (
+  exportTags.value.length
+    ? exportTags.value.map(tag => exportLabelMap[tag]).join('、')
+    : '未选择'
+))
+
 function cycleThumbSize() {
   const sizes: ThumbSize[] = ['small', 'medium', 'large']
   thumbSize.value = sizes[(sizes.indexOf(thumbSize.value) + 1) % 3]
@@ -54,13 +70,13 @@ function cycleThumbSize() {
 
 async function loadCounts() {
   try {
-    const [all, fav, del, favDel] = await Promise.all([
+    const [all, fav, del, damaged] = await Promise.all([
       fetchFeed({ page: 1, page_size: 1 }),
       fetchFeed({ page: 1, page_size: 1, is_favorited: true }),
       fetchFeed({ page: 1, page_size: 1, is_deleted: true }),
-      fetchFeed({ page: 1, page_size: 1, is_favorited: true, is_deleted: true }),
+      fetchFeed({ page: 1, page_size: 1, is_damaged: true }),
     ])
-    counts.value = { all: all.total, favorited: fav.total, deleted: del.total, favAndDel: favDel.total }
+    counts.value = { all: all.total, favorited: fav.total, deleted: del.total, damaged: damaged.total }
   } catch { /* loadCounts 失败不阻塞页面 */ }
 }
 
@@ -79,10 +95,12 @@ async function loadItems(reset = false) {
     const params: Record<string, unknown> = { page: page.value, page_size: PAGE_SIZE }
     if (filterFav.value) params.is_favorited = true
     if (filterDel.value) params.is_deleted = true
+    if (filterDamaged.value) params.is_damaged = true
 
     const res = await fetchFeed(params as Parameters<typeof fetchFeed>[0])
     if (reset) items.value = res.items
     else items.value.push(...res.items)
+    currentTotal.value = res.total
     hasMore.value = res.has_next
     page.value++
   } finally {
@@ -90,11 +108,26 @@ async function loadItems(reset = false) {
   }
 }
 
-async function setFilter(fav: boolean, del: boolean) {
+async function setFilter(fav: boolean, del: boolean, damaged: boolean) {
   filterFav.value = fav
   filterDel.value = del
+  filterDamaged.value = damaged
   selected.value.clear()
   await loadItems(true)
+}
+
+function toggleExportTag(tag: ExportTag) {
+  if (exportTags.value.includes(tag)) {
+    exportTags.value = exportTags.value.filter(item => item !== tag)
+  } else {
+    exportTags.value = [...exportTags.value, tag]
+  }
+}
+
+function getExportCount(tag: ExportTag) {
+  if (tag === 'favorited') return counts.value.favorited
+  if (tag === 'deleted') return counts.value.deleted
+  return counts.value.damaged
 }
 
 function toggleSelect(id: string) {
@@ -138,8 +171,10 @@ async function doPurge() {
 
 async function doExport() {
   if (!exportDir.value.trim()) { message.value = '请输入导出目录路径'; setTimeout(() => message.value = '', 3000); return }
-  const res = await exportFavorites(exportDir.value.trim())
+  if (!exportTags.value.length) { message.value = '请选择导出标签'; setTimeout(() => message.value = '', 3000); return }
+  const res = await exportMedia(exportDir.value.trim(), exportTags.value)
   message.value = `已导出 ${res.exported_count} 个文件到 ${exportDir.value}`
+  showExportOptions.value = false
   setTimeout(() => message.value = '', 5000)
 }
 
@@ -157,6 +192,14 @@ async function doToggleDelete(id: string) {
   if (idx !== -1) items.value[idx] = updated
   loadCounts()
   if (filterDel.value) await loadItems(true)
+}
+
+async function doToggleDamaged(id: string) {
+  const updated = await toggleDamaged(id)
+  const idx = items.value.findIndex(i => i.id === updated.id)
+  if (idx !== -1) items.value[idx] = updated
+  loadCounts()
+  if (filterDamaged.value) await loadItems(true)
 }
 
 function openPreview(item: MediaItem) {
@@ -235,18 +278,43 @@ onUnmounted(() => {
         >
           一键清理已删除 ({{ counts.deleted }})
         </button>
-        <div class="flex items-center gap-2">
+        <div class="relative flex items-center gap-2">
           <input
             v-model="exportDir"
-            placeholder="导出收藏到目录..."
+            placeholder="导出到目录..."
             :class="['px-3 py-2 border rounded-lg text-sm placeholder-gray-500 w-64', isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900']"
           />
           <button
-            @click="doExport"
+            @click="showExportOptions = !showExportOptions"
             class="px-4 py-2 bg-pink-600/20 text-pink-400 border border-pink-600/30 rounded-lg text-sm hover:bg-pink-600/30 transition-colors"
           >
-            导出收藏 ({{ counts.favorited }})
+            导出
           </button>
+          <div
+            v-if="showExportOptions"
+            :class="['absolute top-full right-0 mt-2 w-64 p-3 border rounded-lg shadow-xl z-20', isDark ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200']"
+          >
+            <p class="text-xs text-gray-500 mb-2">导出内容: {{ exportSelectionLabel }}</p>
+            <label
+              v-for="tag in exportOptions"
+              :key="tag"
+              class="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
+            >
+              <span>{{ exportLabelMap[tag] }} ({{ getExportCount(tag) }})</span>
+              <input
+                type="checkbox"
+                :checked="exportTags.includes(tag)"
+                class="w-4 h-4 accent-pink-500"
+                @change="toggleExportTag(tag)"
+              />
+            </label>
+            <button
+              @click="doExport"
+              class="mt-3 w-full px-3 py-2 bg-pink-600 text-white rounded-lg text-sm hover:bg-pink-500 transition-colors"
+            >
+              确认导出
+            </button>
+          </div>
         </div>
       </div>
 
@@ -254,16 +322,16 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
           <button
-            @click="setFilter(false, false)"
+            @click="setFilter(false, false, false)"
             :class="[
               'px-3 py-1 rounded-full text-xs font-medium transition-colors',
-              !filterFav && !filterDel ? 'bg-blue-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
+              !filterFav && !filterDel && !filterDamaged ? 'bg-blue-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
             ]"
           >
             全部 ({{ counts.all }})
           </button>
           <button
-            @click="setFilter(!filterFav, filterDel)"
+            @click="setFilter(!filterFav, filterDel, filterDamaged)"
             :class="[
               'px-3 py-1 rounded-full text-xs font-medium transition-colors',
               filterFav ? 'bg-pink-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
@@ -272,7 +340,7 @@ onUnmounted(() => {
             已收藏 ({{ counts.favorited }})
           </button>
           <button
-            @click="setFilter(filterFav, !filterDel)"
+            @click="setFilter(filterFav, !filterDel, filterDamaged)"
             :class="[
               'px-3 py-1 rounded-full text-xs font-medium transition-colors',
               filterDel ? 'bg-red-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
@@ -280,8 +348,17 @@ onUnmounted(() => {
           >
             已删除 ({{ counts.deleted }})
           </button>
-          <span v-if="filterFav && filterDel" class="text-xs text-gray-500">
-            交集: {{ counts.favAndDel }} 项
+          <button
+            @click="setFilter(filterFav, filterDel, !filterDamaged)"
+            :class="[
+              'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+              filterDamaged ? 'bg-purple-600 text-white' : isDark ? 'bg-gray-800 text-gray-400 hover:text-gray-200' : 'bg-gray-200 text-gray-500 hover:text-gray-700',
+            ]"
+          >
+            已损坏 ({{ counts.damaged }})
+          </button>
+          <span v-if="filterFav || filterDel || filterDamaged" class="text-xs text-gray-500">
+            当前筛选: {{ currentTotal }} 项
           </span>
           <button
             @click="cycleThumbSize"
@@ -296,8 +373,10 @@ onUnmounted(() => {
           </button>
           <button @click="doBatch('favorite')" class="px-3 py-1 bg-pink-600/20 text-pink-400 rounded text-xs hover:bg-pink-600/30">批量收藏</button>
           <button @click="doBatch('delete')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">批量删除</button>
+          <button @click="doBatch('damage')" class="px-3 py-1 bg-purple-600/20 text-purple-400 rounded text-xs hover:bg-purple-600/30">标记损坏</button>
           <button @click="doBatch('unfavorite')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">取消收藏</button>
           <button @click="doBatch('undelete')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">取消删除</button>
+          <button @click="doBatch('undamage')" :class="['px-3 py-1 rounded text-xs', isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']">取消损坏</button>
         </div>
       </div>
 
@@ -355,6 +434,7 @@ onUnmounted(() => {
           <div class="flex items-center gap-2 shrink-0" @click.stop>
             <span v-if="item.is_favorited" class="text-xs text-pink-400">已收藏</span>
             <span v-if="item.is_deleted" class="text-xs text-red-400">已删除</span>
+            <span v-if="item.is_damaged" class="text-xs text-purple-400">已损坏</span>
             <button @click="doToggleFavorite(item.id)" class="p-1 text-gray-500 hover:text-pink-400 transition-colors" :title="item.is_favorited ? '取消收藏' : '收藏'">
               <svg class="w-4 h-4" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
@@ -363,6 +443,12 @@ onUnmounted(() => {
             <button @click="doToggleDelete(item.id)" class="p-1 text-gray-500 hover:text-red-400 transition-colors" :title="item.is_deleted ? '取消删除' : '标记删除'">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" />
+              </svg>
+            </button>
+            <button @click="doToggleDamaged(item.id)" class="p-1 text-gray-500 hover:text-purple-400 transition-colors" :title="item.is_damaged ? '取消损坏标记' : '标记损坏'">
+              <svg class="w-4 h-4" :fill="item.is_damaged ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                <path d="M12 9v4M12 17h.01" />
               </svg>
             </button>
           </div>

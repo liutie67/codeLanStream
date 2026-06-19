@@ -26,3 +26,7 @@ async def create_tables():
             await conn.execute(text("ALTER TABLE media ADD COLUMN preview_path VARCHAR(1024)"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE media ADD COLUMN is_damaged BOOLEAN NOT NULL DEFAULT 0"))
+        except Exception:
+            pass

@@ -6,6 +6,7 @@ import type {
   ImportMediaRequest,
   MediaItem,
   RandomResponse,
+  ExportTag,
 } from './types'
 
 const API_BASE = '/api/media'
@@ -17,6 +18,7 @@ export async function fetchFeed(params: {
   folder?: string
   is_favorited?: boolean
   is_deleted?: boolean
+  is_damaged?: boolean
 }): Promise<FeedResponse> {
   const search = new URLSearchParams()
   if (params.page) search.set('page', String(params.page))
@@ -25,6 +27,7 @@ export async function fetchFeed(params: {
   if (params.folder) search.set('folder', params.folder)
   if (params.is_favorited !== undefined) search.set('is_favorited', String(params.is_favorited))
   if (params.is_deleted !== undefined) search.set('is_deleted', String(params.is_deleted))
+  if (params.is_damaged !== undefined) search.set('is_damaged', String(params.is_damaged))
 
   const res = await fetch(`${API_BASE}/feed?${search}`)
   return res.json()
@@ -36,6 +39,7 @@ export async function fetchRandom(
   mediaType?: string | null,
   isFavorited?: boolean | null,
   isDeleted?: boolean | null,
+  isDamaged?: boolean | null,
 ): Promise<RandomResponse> {
   const res = await fetch(`${API_BASE}/random`, {
     method: 'POST',
@@ -46,6 +50,7 @@ export async function fetchRandom(
       ...(mediaType && { media_type: mediaType }),
       ...(isFavorited !== undefined && isFavorited !== null && { is_favorited: isFavorited }),
       ...(isDeleted !== undefined && isDeleted !== null && { is_deleted: isDeleted }),
+      ...(isDamaged !== undefined && isDamaged !== null && { is_damaged: isDamaged }),
     }),
   })
   return res.json()
@@ -82,6 +87,11 @@ export async function toggleDelete(id: string): Promise<MediaItem> {
   return res.json()
 }
 
+export async function toggleDamaged(id: string): Promise<MediaItem> {
+  const res = await fetch(`${API_BASE}/${id}/damage`, { method: 'POST' })
+  return res.json()
+}
+
 export async function purgeDeleted(): Promise<{ deleted_count: number }> {
   const res = await fetch(`${API_BASE}/manage/purge`, { method: 'POST' })
   if (!res.ok) throw new Error(`清理失败: ${res.status}`)
@@ -93,6 +103,15 @@ export async function exportFavorites(targetDir: string): Promise<{ exported_cou
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ target_dir: targetDir }),
+  })
+  return res.json()
+}
+
+export async function exportMedia(targetDir: string, tags: ExportTag[]): Promise<{ exported_count: number }> {
+  const res = await fetch(`${API_BASE}/manage/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_dir: targetDir, tags }),
   })
   return res.json()
 }

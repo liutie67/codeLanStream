@@ -11,9 +11,10 @@ from app.models.media import MediaType
 from app.schemas.media import FeedResponse
 from app.services.import_jobs import get_import_job, start_import_job
 from app.services.media import (
-    batch_update, browse_folders, export_favorites, get_feed, get_media,
+    ExportTag, batch_update, browse_folders, export_favorites, export_media_by_tags,
+    get_feed, get_media,
     get_mime_type, get_random_media, parse_range, purge_deleted,
-    toggle_deleted, toggle_favorite,
+    toggle_damaged, toggle_deleted, toggle_favorite,
 )
 
 router = APIRouter(prefix="/api/media", tags=["media"])
@@ -55,9 +56,10 @@ async def feed(
     folder: str | None = None,
     is_favorited: bool | None = None,
     is_deleted: bool | None = None,
+    is_damaged: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_feed(db, page, page_size, media_type, folder, is_favorited, is_deleted)
+    return await get_feed(db, page, page_size, media_type, folder, is_favorited, is_deleted, is_damaged)
 
 
 class RandomRequest(BaseModel):
@@ -66,12 +68,21 @@ class RandomRequest(BaseModel):
     media_type: MediaType | None = None
     is_favorited: bool | None = None
     is_deleted: bool | None = None
+    is_damaged: bool | None = None
 
 
 @router.post("/random")
 async def random_media(body: RandomRequest, db: AsyncSession = Depends(get_db)):
     exclude = body.exclude_ids or None
-    return await get_random_media(db, body.count, exclude, body.media_type, body.is_favorited, body.is_deleted)
+    return await get_random_media(
+        db,
+        body.count,
+        exclude,
+        body.media_type,
+        body.is_favorited,
+        body.is_deleted,
+        body.is_damaged,
+    )
 
 
 @router.get("/browse")
@@ -172,13 +183,22 @@ async def mark_deleted(media_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Media not found")
 
 
+@router.post("/{media_id}/damage")
+async def mark_damaged(media_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        return await toggle_damaged(db, media_id)
+    except ValueError:
+        raise HTTPException(404, "Media not found")
+
+
 class ExportRequest(BaseModel):
     target_dir: str
+    tags: list[ExportTag] = Field(default_factory=lambda: ["favorited"])
 
 
 class BatchRequest(BaseModel):
     ids: list[str]
-    action: str  # favorite, unfavorite, delete, undelete
+    action: str  # favorite, unfavorite, delete, undelete, damage, undamage
 
 
 class ImportRequest(BaseModel):
@@ -200,6 +220,12 @@ async def purge(db: AsyncSession = Depends(get_db)):
 @router.post("/manage/export-favorites")
 async def export_fav(body: ExportRequest, db: AsyncSession = Depends(get_db)):
     count = await export_favorites(db, body.target_dir)
+    return {"exported_count": count}
+
+
+@router.post("/manage/export")
+async def export_media(body: ExportRequest, db: AsyncSession = Depends(get_db)):
+    count = await export_media_by_tags(db, body.target_dir, body.tags)
     return {"exported_count": count}
 
 

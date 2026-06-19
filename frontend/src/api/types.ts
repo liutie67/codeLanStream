@@ -1,4 +1,5 @@
 export type MediaType = 'video' | 'image'
+export type ExportTag = 'favorited' | 'deleted' | 'damaged'
 
 export interface MediaItem {
   id: string
@@ -14,6 +15,7 @@ export interface MediaItem {
   preview_path: string | null
   is_favorited: boolean
   is_deleted: boolean
+  is_damaged: boolean
   created_at: string
 }
 

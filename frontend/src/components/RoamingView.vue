@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchRandom, getStreamUrl, getPreviewUrl, toggleFavorite, toggleDelete } from '../api/client'
+import { fetchRandom, getStreamUrl, getPreviewUrl, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useSwipe, type SwipeDirection } from '../composables/useSwipe'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
@@ -10,6 +10,7 @@ import VideoProgress from './VideoProgress.vue'
 const emit = defineEmits<{ close: [] }>()
 
 const { thumbMode } = useThumbnailMode()
+type MarkAction = 'favorite' | 'delete' | 'damage'
 
 const items = ref<MediaItem[]>([])
 const currentIndex = ref(0)
@@ -30,7 +31,7 @@ const videoEl = ref<HTMLVideoElement | null>(null)
 const isMuted = ref(true)
 const userVolume = ref(0)
 const videoPaused = ref(true)
-const lastAction = ref<{ itemId: string; action: 'favorite' | 'delete' } | null>(null)
+const lastAction = ref<{ itemId: string; action: MarkAction } | null>(null)
 const isDesktop = !('ontouchstart' in window)
 
 const current = computed(() => items.value[currentIndex.value])
@@ -51,6 +52,16 @@ const preloadItems = computed(() => {
 const containerRef = ref<HTMLElement>()
 
 const hasTransition = computed(() => phase.value !== 'dragging')
+const currentBackground = computed(() => {
+  if (!current.value) return 'black'
+  if (current.value.is_damaged) return 'rgba(168,85,247,1)'
+  if (current.value.is_deleted && current.value.is_favorited) {
+    return 'linear-gradient(to right, rgba(239,68,68,1) 50%, rgba(234,179,8,1) 50%)'
+  }
+  if (current.value.is_deleted) return 'rgba(239,68,68,1)'
+  if (current.value.is_favorited) return 'rgba(234,179,8,1)'
+  return 'black'
+})
 
 interface PreloadEntry {
   preview?: HTMLImageElement
@@ -139,6 +150,33 @@ function schedulePreload() {
   }, 0)
 }
 
+function toggleByAction(action: MarkAction, itemId: string): Promise<MediaItem> {
+  if (action === 'favorite') return toggleFavorite(itemId)
+  if (action === 'delete') return toggleDelete(itemId)
+  return toggleDamaged(itemId)
+}
+
+function applyAction(action: MarkAction, item: MediaItem) {
+  lastAction.value = { itemId: item.id, action }
+  toggleByAction(action, item.id).then(updated => {
+    const idx = items.value.findIndex(i => i.id === updated.id)
+    if (idx !== -1) items.value[idx] = updated
+  }).catch(() => {})
+}
+
+async function markCurrent(action: MarkAction) {
+  if (isLocked.value || !current.value) return
+  isLocked.value = true
+  applyAction(action, current.value)
+  phase.value = 'dragging'
+  offsetX.value = 0
+  offsetY.value = 0
+  currentIndex.value++
+  await new Promise(r => requestAnimationFrame(r))
+  phase.value = 'idle'
+  isLocked.value = false
+}
+
 const { attach, detach } = useSwipe(containerRef, {
   onSwipe: handleSwipe,
   onDragUpdate: (offset) => {
@@ -186,8 +224,7 @@ async function handleSwipe(direction: SwipeDirection) {
     if (lastAction.value) {
       const { itemId, action } = lastAction.value
       lastAction.value = null
-      const undoFn = action === 'favorite' ? toggleFavorite : toggleDelete
-      undoFn(itemId).then(updated => {
+      toggleByAction(action, itemId).then(updated => {
         const idx = items.value.findIndex(i => i.id === updated.id)
         if (idx !== -1) items.value[idx] = updated
       }).catch(() => {})
@@ -195,19 +232,7 @@ async function handleSwipe(direction: SwipeDirection) {
     offsetY.value = vh
   } else if (direction === 'right' || direction === 'left') {
     // Fire action immediately, don't await
-    if (direction === 'right' && current.value) {
-      lastAction.value = { itemId: current.value.id, action: 'favorite' }
-      toggleFavorite(current.value.id).then(updated => {
-        const idx = items.value.findIndex(i => i.id === updated.id)
-        if (idx !== -1) items.value[idx] = updated
-      }).catch(() => {})
-    } else if (direction === 'left' && current.value) {
-      lastAction.value = { itemId: current.value.id, action: 'delete' }
-      toggleDelete(current.value.id).then(updated => {
-        const idx = items.value.findIndex(i => i.id === updated.id)
-        if (idx !== -1) items.value[idx] = updated
-      }).catch(() => {})
-    }
+    if (current.value) applyAction(direction === 'right' ? 'favorite' : 'delete', current.value)
     // Skip slide animation — switch instantly
     phase.value = 'dragging'
     offsetX.value = 0
@@ -242,6 +267,7 @@ async function loadMore() {
   try {
     const res = await fetchRandom(
       20, [...loadedIds.value], mediaType.value,
+      hideMarked.value ? false : null,
       hideMarked.value ? false : null,
       hideMarked.value ? false : null,
     )
@@ -336,6 +362,7 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'ArrowRight' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
   else if (e.key === 'f') handleSwipe('right')
   else if (e.key === 'd') handleSwipe('left')
+  else if (e.key.toLowerCase() === 'g') markCurrent('damage')
   else if ((e.key === 'm' || e.key === '0') && videoEl.value) {
     videoEl.value.muted = !videoEl.value.muted
     isMuted.value = videoEl.value.muted
@@ -360,11 +387,7 @@ onUnmounted(() => {
     class="fixed inset-0 z-50 text-white overflow-hidden select-none"
     :style="{
       touchAction: 'none',
-      background: current?.is_deleted && current?.is_favorited
-        ? 'linear-gradient(to right, rgba(239,68,68,1) 50%, rgba(234,179,8,1) 50%)'
-        : current?.is_deleted ? 'rgba(239,68,68,1)'
-        : current?.is_favorited ? 'rgba(234,179,8,1)'
-        : 'black',
+      background: currentBackground,
     }"
   >
     <!-- Top bar -->
@@ -377,7 +400,7 @@ onUnmounted(() => {
           @click="toggleHideMarked"
           class="h-8 px-2.5 flex items-center gap-1 rounded-full text-xs transition-colors"
           :class="hideMarked ? 'bg-blue-500/80 text-white' : 'bg-white/10 text-white/50 hover:text-white/80'"
-          :title="hideMarked ? '显示全部' : '隐藏已收藏/已删除'"
+          :title="hideMarked ? '显示全部' : '隐藏已收藏/已删除/已损坏'"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path v-if="hideMarked" stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M10.5 10.5a3 3 0 004.243 4.243m0 0l1.536-1.536M6.75 6.75a7.5 7.5 0 009.743 9.743"/>

@@ -33,6 +33,7 @@ class Media(Base):
     preview_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     is_favorited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_damaged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

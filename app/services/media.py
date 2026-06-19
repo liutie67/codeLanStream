@@ -3,9 +3,9 @@ import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-from sqlalchemy import delete as sql_delete, func, select
+from sqlalchemy import delete as sql_delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -14,6 +14,7 @@ from app.schemas.media import FeedResponse, MediaOut
 from app.services.thumbnail import generate_thumbnail, generate_preview
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+ExportTag = Literal["favorited", "deleted", "damaged"]
 
 
 def _classify_media(ext: str) -> MediaType | None:
@@ -217,6 +218,7 @@ async def get_feed(
     folder: str | None = None,
     is_favorited: bool | None = None,
     is_deleted: bool | None = None,
+    is_damaged: bool | None = None,
 ) -> FeedResponse:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -233,6 +235,9 @@ async def get_feed(
     if is_deleted is not None:
         query = query.where(Media.is_deleted == is_deleted)
         count_query = count_query.where(Media.is_deleted == is_deleted)
+    if is_damaged is not None:
+        query = query.where(Media.is_damaged == is_damaged)
+        count_query = count_query.where(Media.is_damaged == is_damaged)
 
     total = (await db.execute(count_query)).scalar_one()
     offset = (page - 1) * page_size
@@ -259,6 +264,7 @@ async def get_random_media(
     media_type: MediaType | None = None,
     is_favorited: bool | None = None,
     is_deleted: bool | None = None,
+    is_damaged: bool | None = None,
 ) -> dict:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -276,6 +282,9 @@ async def get_random_media(
     if is_deleted is not None:
         query = query.where(Media.is_deleted == is_deleted)
         count_query = count_query.where(Media.is_deleted == is_deleted)
+    if is_damaged is not None:
+        query = query.where(Media.is_damaged == is_damaged)
+        count_query = count_query.where(Media.is_damaged == is_damaged)
 
     query = query.order_by(func.random()).limit(count)
 
@@ -401,6 +410,16 @@ async def toggle_deleted(db: AsyncSession, media_id: str) -> MediaOut:
     return MediaOut.model_validate(media)
 
 
+async def toggle_damaged(db: AsyncSession, media_id: str) -> MediaOut:
+    media = await get_media(db, media_id)
+    if not media:
+        raise ValueError("Media not found")
+    media.is_damaged = not media.is_damaged
+    await db.commit()
+    await db.refresh(media)
+    return MediaOut.model_validate(media)
+
+
 async def purge_deleted(db: AsyncSession) -> int:
     result = await db.execute(select(Media).where(Media.is_deleted == True))
     items = result.scalars().all()
@@ -419,7 +438,21 @@ async def purge_deleted(db: AsyncSession) -> int:
 
 
 async def export_favorites(db: AsyncSession, target_dir: str) -> int:
-    result = await db.execute(select(Media).where(Media.is_favorited == True))
+    return await export_media_by_tags(db, target_dir, ["favorited"])
+
+
+async def export_media_by_tags(db: AsyncSession, target_dir: str, tags: list[ExportTag]) -> int:
+    filters = []
+    if "favorited" in tags:
+        filters.append(Media.is_favorited == True)
+    if "deleted" in tags:
+        filters.append(Media.is_deleted == True)
+    if "damaged" in tags:
+        filters.append(Media.is_damaged == True)
+    if not filters:
+        return 0
+
+    result = await db.execute(select(Media).where(or_(*filters)))
     items = result.scalars().all()
     Path(target_dir).mkdir(parents=True, exist_ok=True)
     count = 0
@@ -445,6 +478,10 @@ async def batch_update(db: AsyncSession, ids: list[str], action: str) -> int:
             media.is_deleted = True
         elif action == "undelete":
             media.is_deleted = False
+        elif action == "damage":
+            media.is_damaged = True
+        elif action == "undamage":
+            media.is_damaged = False
         else:
             continue
         count += 1
