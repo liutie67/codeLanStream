@@ -32,6 +32,7 @@ const isMuted = ref(true)
 const userVolume = ref(0)
 const videoPaused = ref(true)
 const lastAction = ref<{ itemId: string; action: MarkAction } | null>(null)
+const pendingKeyAction = ref<MarkAction | null>(null)
 const isDesktop = !('ontouchstart' in window)
 
 const current = computed(() => items.value[currentIndex.value])
@@ -61,6 +62,27 @@ const currentBackground = computed(() => {
   if (current.value.is_deleted) return 'rgba(239,68,68,1)'
   if (current.value.is_favorited) return 'rgba(234,179,8,1)'
   return 'black'
+})
+const keyBorderStyle = computed(() => {
+  if (pendingKeyAction.value === 'favorite') {
+    return {
+      borderColor: 'rgb(234,179,8)',
+      boxShadow: 'inset 0 0 0 3px rgb(234,179,8)',
+    }
+  }
+  if (pendingKeyAction.value === 'delete') {
+    return {
+      borderColor: 'rgb(239,68,68)',
+      boxShadow: 'inset 0 0 0 3px rgb(239,68,68)',
+    }
+  }
+  if (pendingKeyAction.value === 'damage') {
+    return {
+      borderColor: 'rgb(168,85,247)',
+      boxShadow: 'inset 0 0 0 3px rgb(168,85,247)',
+    }
+  }
+  return {}
 })
 
 interface PreloadEntry {
@@ -154,6 +176,14 @@ function toggleByAction(action: MarkAction, itemId: string): Promise<MediaItem> 
   if (action === 'favorite') return toggleFavorite(itemId)
   if (action === 'delete') return toggleDelete(itemId)
   return toggleDamaged(itemId)
+}
+
+function actionFromKey(key: string): MarkAction | null {
+  const normalized = key.toLowerCase()
+  if (normalized === 'f') return 'favorite'
+  if (normalized === 'd') return 'delete'
+  if (normalized === 'g') return 'damage'
+  return null
 }
 
 function applyAction(action: MarkAction, item: MediaItem) {
@@ -352,7 +382,13 @@ function handleClick(e: MouseEvent) {
 
 // Keyboard
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === ' ') {
+  const action = actionFromKey(e.key)
+  if (action) {
+    e.preventDefault()
+    if (!e.repeat && !pendingKeyAction.value && !isLocked.value && current.value) {
+      pendingKeyAction.value = action
+    }
+  } else if (e.key === ' ') {
     e.preventDefault()
     if (videoEl.value) videoEl.value.paused ? videoEl.value.play() : videoEl.value.pause()
   } else if (e.key === 'Escape') emit('close')
@@ -360,25 +396,38 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'ArrowUp') handleSwipe('down')
   else if (e.key === 'ArrowLeft' && videoEl.value) videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime - 30)
   else if (e.key === 'ArrowRight' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
-  else if (e.key === 'f') handleSwipe('right')
-  else if (e.key === 'd') handleSwipe('left')
-  else if (e.key.toLowerCase() === 'g') markCurrent('damage')
   else if ((e.key === 'm' || e.key === '0') && videoEl.value) {
     videoEl.value.muted = !videoEl.value.muted
     isMuted.value = videoEl.value.muted
   }
 }
 
+function onKeyup(e: KeyboardEvent) {
+  const action = actionFromKey(e.key)
+  if (!action || pendingKeyAction.value !== action) return
+  e.preventDefault()
+  pendingKeyAction.value = null
+  markCurrent(action)
+}
+
+function clearPendingKeyAction() {
+  pendingKeyAction.value = null
+}
+
 onMounted(() => {
   attach()
   loadMore()
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('keyup', onKeyup)
+  window.addEventListener('blur', clearPendingKeyAction)
 })
 
 onUnmounted(() => {
   detach()
   clearPreloadCache()
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('keyup', onKeyup)
+  window.removeEventListener('blur', clearPendingKeyAction)
 })
 </script>
 
@@ -552,6 +601,12 @@ onUnmounted(() => {
         <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/>
       </svg>
     </div>
+
+    <div
+      v-if="pendingKeyAction"
+      class="absolute inset-0 z-20 pointer-events-none border-[12px]"
+      :style="keyBorderStyle"
+    />
 
     <!-- Bottom info + progress — desktop: bottom 25vh for large seek target -->
     <div
