@@ -33,6 +33,8 @@ const userVolume = ref(0)
 const videoPaused = ref(true)
 const lastAction = ref<{ itemId: string; action: MarkAction } | null>(null)
 const pendingKeyAction = ref<MarkAction | null>(null)
+const playbackRate = ref(1)
+const showHelp = ref(false)
 const isDesktop = !('ontouchstart' in window)
 
 const current = computed(() => items.value[currentIndex.value])
@@ -84,6 +86,34 @@ const keyBorderStyle = computed(() => {
   }
   return {}
 })
+const shortcutGroups = [
+  {
+    title: '浏览',
+    items: [
+      { keys: 'S / ↓', label: '下一个媒体' },
+      { keys: 'W / ↑', label: '上一个媒体' },
+      { keys: 'Esc', label: '退出漫游' },
+    ],
+  },
+  {
+    title: '标记',
+    items: [
+      { keys: 'F', label: '收藏，松开后跳到下一个' },
+      { keys: 'D', label: '删除，松开后跳到下一个' },
+      { keys: 'G', label: '损坏，松开后跳到下一个' },
+    ],
+  },
+  {
+    title: '视频',
+    items: [
+      { keys: 'Space', label: '播放 / 暂停' },
+      { keys: 'Q / ←', label: '快退 30 秒' },
+      { keys: 'E / →', label: '快进 30 秒' },
+      { keys: '1 / 2 / 3', label: '1 倍 / 2 倍 / 3 倍速' },
+      { keys: 'C / M / 0', label: '静音开关' },
+    ],
+  },
+]
 
 interface PreloadEntry {
   preview?: HTMLImageElement
@@ -192,6 +222,24 @@ function applyAction(action: MarkAction, item: MediaItem) {
     const idx = items.value.findIndex(i => i.id === updated.id)
     if (idx !== -1) items.value[idx] = updated
   }).catch(() => {})
+}
+
+function seekVideo(deltaSeconds: number) {
+  if (!videoEl.value) return
+  const duration = Number.isFinite(videoEl.value.duration) ? videoEl.value.duration : Infinity
+  const nextTime = Math.max(0, Math.min(duration, videoEl.value.currentTime + deltaSeconds))
+  videoEl.value.currentTime = nextTime
+}
+
+function setPlaybackRate(rate: number) {
+  playbackRate.value = rate
+  if (videoEl.value) videoEl.value.playbackRate = rate
+}
+
+function toggleMute() {
+  if (!videoEl.value) return
+  videoEl.value.muted = !videoEl.value.muted
+  isMuted.value = videoEl.value.muted
 }
 
 async function markCurrent(action: MarkAction) {
@@ -346,6 +394,7 @@ watch(current, async () => {
     const wantMuted = isMuted.value
     videoEl.value.muted = true
     videoEl.value.volume = userVolume.value || 1
+    videoEl.value.playbackRate = playbackRate.value
     if (thumbMode.value === 'grid') {
       videoEl.value.pause()
       videoPaused.value = true
@@ -382,6 +431,11 @@ function handleClick(e: MouseEvent) {
 
 // Keyboard
 function onKeydown(e: KeyboardEvent) {
+  if (showHelp.value) {
+    if (e.key === 'Escape') showHelp.value = false
+    return
+  }
+
   const action = actionFromKey(e.key)
   if (action) {
     e.preventDefault()
@@ -394,12 +448,14 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.key === 'Escape') emit('close')
   else if (e.key === 'ArrowDown') handleSwipe('up')
   else if (e.key === 'ArrowUp') handleSwipe('down')
-  else if (e.key === 'ArrowLeft' && videoEl.value) videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime - 30)
-  else if (e.key === 'ArrowRight' && videoEl.value) videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
-  else if ((e.key === 'm' || e.key === '0') && videoEl.value) {
-    videoEl.value.muted = !videoEl.value.muted
-    isMuted.value = videoEl.value.muted
-  }
+  else if (e.key.toLowerCase() === 's') handleSwipe('up')
+  else if (e.key.toLowerCase() === 'w') handleSwipe('down')
+  else if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'q') seekVideo(-30)
+  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'e') seekVideo(30)
+  else if (e.key === '1') setPlaybackRate(1)
+  else if (e.key === '2') setPlaybackRate(2)
+  else if (e.key === '3') setPlaybackRate(3)
+  else if (e.key === 'm' || e.key.toLowerCase() === 'c' || e.key === '0') toggleMute()
 }
 
 function onKeyup(e: KeyboardEvent) {
@@ -458,10 +514,55 @@ onUnmounted(() => {
             <path v-if="!hideMarked" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
           </svg>
         </button>
+        <button
+          @click="showHelp = true"
+          class="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-white/60 hover:text-white transition-colors"
+          title="快捷键说明"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.5 9a2.7 2.7 0 115 1.6c-.9.7-1.7 1.2-2 2.4" />
+            <path stroke-linecap="round" d="M12 17h.01" />
+          </svg>
+        </button>
       </div>
       <TypeFilter :current="mediaType" @change="setMediaType" />
       <span class="text-xs text-white/50 tabular-nums w-12 text-right">{{ currentIndex + 1 }}</span>
     </header>
+
+    <div
+      v-if="showHelp"
+      class="absolute inset-0 z-40 flex items-center justify-center bg-black/70 px-4"
+      @click.self="showHelp = false"
+    >
+      <div class="w-full max-w-lg rounded-lg border border-white/15 bg-gray-950 text-white shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <h2 class="text-base font-semibold">漫游快捷键</h2>
+          <button
+            @click="showHelp = false"
+            class="w-8 h-8 flex items-center justify-center rounded-full text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+            title="关闭"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="max-h-[70vh] overflow-y-auto px-4 py-3">
+          <section v-for="group in shortcutGroups" :key="group.title" class="py-2">
+            <h3 class="mb-2 text-xs font-semibold text-white/45">{{ group.title }}</h3>
+            <div class="divide-y divide-white/10">
+              <div
+                v-for="item in group.items"
+                :key="item.keys"
+                class="flex items-center justify-between gap-4 py-2 text-sm"
+              >
+                <kbd class="shrink-0 rounded border border-white/20 bg-white/10 px-2 py-1 font-mono text-xs text-white/80">{{ item.keys }}</kbd>
+                <span class="text-right text-white/75">{{ item.label }}</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
 
     <!-- Card stack -->
     <div ref="containerRef" class="absolute inset-0" @click="handleClick">
