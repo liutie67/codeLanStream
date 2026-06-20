@@ -31,6 +31,9 @@ const isLocked = ref(false)
 const browseMode = ref<BrowseMode>('random')
 const orderedPage = ref(1)
 const folderAnchor = ref<string | null>(null)
+const folderAfter = ref<string | null>(null)
+const folderStart = ref<string | null>(null)
+const folderWrapped = ref(false)
 const PRELOAD_COUNT = 4
 const VIDEO_AUTO_PRELOAD_DISTANCE = 1
 const LOAD_BATCH_SIZE = 20
@@ -379,26 +382,15 @@ async function loadMore() {
       )
       nextItems = res.items
       if (res.items.length < LOAD_BATCH_SIZE) hasMore.value = false
+    } else if (browseMode.value === 'folder') {
+      nextItems = await loadFolderModeItems()
     } else {
-      if (browseMode.value === 'folder' && !folderAnchor.value) {
-        folderAnchor.value = current.value?.folder || items.value[0]?.folder || null
-      }
-      if (browseMode.value === 'folder' && !folderAnchor.value) {
-        hasMore.value = false
-        return
-      }
-
       const params: Parameters<typeof fetchFeed>[0] = {
         page: orderedPage.value,
         page_size: LOAD_BATCH_SIZE,
         ...(mediaType.value && { media_type: mediaType.value }),
         ...(hideMarked.value && { is_favorited: false, is_deleted: false, is_damaged: false }),
-        ...(browseMode.value === 'folder' && {
-          folder: folderAnchor.value || undefined,
-          folder_exact: true,
-          sort: 'file_path_asc',
-        }),
-        ...(browseMode.value === 'size' && { sort: 'size_desc' }),
+        sort: 'size_desc',
       }
       const res = await fetchFeed(params)
       nextItems = res.items
@@ -417,6 +409,83 @@ async function loadMore() {
   }
 }
 
+function feedFilterParams(): Pick<Parameters<typeof fetchFeed>[0], 'media_type' | 'is_favorited' | 'is_deleted' | 'is_damaged'> {
+  return {
+    ...(mediaType.value && { media_type: mediaType.value }),
+    ...(hideMarked.value && { is_favorited: false, is_deleted: false, is_damaged: false }),
+  }
+}
+
+async function discoverNextFolder(): Promise<boolean> {
+  while (true) {
+    const res = await fetchFeed({
+      ...feedFilterParams(),
+      page: 1,
+      page_size: 1,
+      sort: 'file_path_asc',
+      ...(folderAfter.value && { folder_after: folderAfter.value }),
+    })
+    const nextFolder = res.items[0]?.folder
+
+    if (!nextFolder) {
+      if (!folderWrapped.value && folderStart.value) {
+        folderWrapped.value = true
+        folderAfter.value = null
+        continue
+      }
+      hasMore.value = false
+      return false
+    }
+
+    if (folderWrapped.value && folderStart.value && nextFolder >= folderStart.value) {
+      hasMore.value = false
+      return false
+    }
+
+    folderAnchor.value = nextFolder
+    orderedPage.value = 1
+    return true
+  }
+}
+
+async function loadFolderModeItems(): Promise<MediaItem[]> {
+  while (true) {
+    if (!folderAnchor.value) {
+      folderAnchor.value = current.value?.folder || items.value[0]?.folder || folderStart.value
+      if (folderAnchor.value && !folderStart.value) folderStart.value = folderAnchor.value
+    }
+
+    if (!folderAnchor.value && !(await discoverNextFolder())) return []
+
+    const activeFolder = folderAnchor.value
+    if (!activeFolder) {
+      hasMore.value = false
+      return []
+    }
+
+    const res = await fetchFeed({
+      ...feedFilterParams(),
+      page: orderedPage.value,
+      page_size: LOAD_BATCH_SIZE,
+      folder: activeFolder,
+      folder_exact: true,
+      sort: 'file_path_asc',
+    })
+    orderedPage.value++
+
+    if (!res.has_next) {
+      folderAfter.value = activeFolder
+      folderAnchor.value = null
+      orderedPage.value = 1
+      hasMore.value = true
+    } else {
+      hasMore.value = true
+    }
+
+    if (res.items.length > 0) return res.items
+  }
+}
+
 function resetRoamingItems() {
   releaseMediaElement(videoEl.value)
   clearPreloadCache()
@@ -425,6 +494,9 @@ function resetRoamingItems() {
   currentIndex.value = 0
   hasMore.value = true
   orderedPage.value = 1
+  folderAfter.value = null
+  folderWrapped.value = false
+  folderStart.value = browseMode.value === 'folder' ? (folderAnchor.value || current.value?.folder || null) : null
   lastAction.value = null
   pendingKeyAction.value = null
   videoPaused.value = true

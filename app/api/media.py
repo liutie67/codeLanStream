@@ -58,6 +58,7 @@ async def feed(
     is_deleted: bool | None = None,
     is_damaged: bool | None = None,
     folder_exact: bool = False,
+    folder_after: str | None = None,
     sort: FeedSort = "created_desc",
     db: AsyncSession = Depends(get_db),
 ):
@@ -71,6 +72,7 @@ async def feed(
         is_deleted,
         is_damaged,
         folder_exact,
+        folder_after,
         sort,
     )
 

@@ -17,6 +17,7 @@ export async function fetchFeed(params: {
   media_type?: string
   folder?: string
   folder_exact?: boolean
+  folder_after?: string
   sort?: 'created_desc' | 'file_path_asc' | 'size_desc'
   is_favorited?: boolean
   is_deleted?: boolean
@@ -28,6 +29,7 @@ export async function fetchFeed(params: {
   if (params.media_type) search.set('media_type', params.media_type)
   if (params.folder) search.set('folder', params.folder)
   if (params.folder_exact !== undefined) search.set('folder_exact', String(params.folder_exact))
+  if (params.folder_after) search.set('folder_after', params.folder_after)
   if (params.sort) search.set('sort', params.sort)
   if (params.is_favorited !== undefined) search.set('is_favorited', String(params.is_favorited))
   if (params.is_deleted !== undefined) search.set('is_deleted', String(params.is_deleted))

@@ -221,6 +221,7 @@ async def get_feed(
     is_deleted: bool | None = None,
     is_damaged: bool | None = None,
     folder_exact: bool = False,
+    folder_after: str | None = None,
     sort: FeedSort = "created_desc",
 ) -> FeedResponse:
     query = select(Media)
@@ -233,6 +234,9 @@ async def get_feed(
         folder_filter = Media.folder == folder if folder_exact else Media.folder.contains(folder)
         query = query.where(folder_filter)
         count_query = count_query.where(folder_filter)
+    if folder_after:
+        query = query.where(Media.folder.isnot(None), Media.folder > folder_after)
+        count_query = count_query.where(Media.folder.isnot(None), Media.folder > folder_after)
     if is_favorited is not None:
         query = query.where(Media.is_favorited == is_favorited)
         count_query = count_query.where(Media.is_favorited == is_favorited)
