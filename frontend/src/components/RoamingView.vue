@@ -80,27 +80,39 @@ const currentBackground = computed(() => {
   if (current.value.is_favorited) return 'rgba(234,179,8,1)'
   return 'black'
 })
+const keyActionColor = computed(() => {
+  if (pendingKeyAction.value === 'favorite') return 'rgb(234,179,8)'
+  if (pendingKeyAction.value === 'delete') return 'rgb(239,68,68)'
+  if (pendingKeyAction.value === 'damage') return 'rgb(168,85,247)'
+  return 'transparent'
+})
 const keyBorderStyle = computed(() => {
   if (pendingKeyAction.value === 'favorite') {
     return {
-      borderColor: 'rgb(234,179,8)',
-      boxShadow: 'inset 0 0 0 3px rgb(234,179,8)',
+      borderColor: keyActionColor.value,
+      boxShadow: `inset 0 0 0 3px ${keyActionColor.value}`,
     }
   }
   if (pendingKeyAction.value === 'delete') {
     return {
-      borderColor: 'rgb(239,68,68)',
-      boxShadow: 'inset 0 0 0 3px rgb(239,68,68)',
+      borderColor: keyActionColor.value,
+      boxShadow: `inset 0 0 0 3px ${keyActionColor.value}`,
     }
   }
   if (pendingKeyAction.value === 'damage') {
     return {
-      borderColor: 'rgb(168,85,247)',
-      boxShadow: 'inset 0 0 0 3px rgb(168,85,247)',
+      borderColor: keyActionColor.value,
+      boxShadow: `inset 0 0 0 3px ${keyActionColor.value}`,
     }
   }
   return {}
 })
+const keyIconStyle = computed(() => ({
+  color: keyActionColor.value,
+  width: 'min(calc(100vw - 2rem), calc(100vh - 7rem))',
+  height: 'min(calc(100vw - 2rem), calc(100vh - 7rem))',
+  filter: `drop-shadow(0 0 18px ${keyActionColor.value})`,
+}))
 
 function getVideoPosterUrl(item: MediaItem): string | null {
   if (item.media_type !== 'video') return null
@@ -886,9 +898,50 @@ onUnmounted(() => {
 
     <div
       v-if="pendingKeyAction"
-      class="absolute inset-0 z-20 pointer-events-none border-[12px]"
+      class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center border-[12px] p-4 pt-16 pb-8"
       :style="keyBorderStyle"
-    />
+    >
+      <svg
+        v-if="pendingKeyAction === 'delete'"
+        :style="keyIconStyle"
+        class="max-w-full max-h-full"
+        fill="none"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-width="5"
+        viewBox="0 0 100 100"
+      >
+        <path d="M22 22L78 78M78 22L22 78" />
+      </svg>
+      <svg
+        v-else-if="pendingKeyAction === 'favorite'"
+        :style="keyIconStyle"
+        class="max-w-full max-h-full"
+        fill="none"
+        stroke="currentColor"
+        stroke-linejoin="round"
+        stroke-width="4"
+        viewBox="0 0 100 100"
+      >
+        <path d="M50 12l11.4 23.1 25.5 3.7-18.5 18 4.4 25.4L50 70.2 27.2 82.2l4.4-25.4-18.5-18 25.5-3.7L50 12z" />
+      </svg>
+      <svg
+        v-else
+        :style="keyIconStyle"
+        class="max-w-full max-h-full"
+        fill="none"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="4"
+        viewBox="0 0 100 100"
+      >
+        <path d="M16 22a6 6 0 016-6h56a6 6 0 016 6v56a6 6 0 01-6 6H22a6 6 0 01-6-6V22z" />
+        <path d="M23 72l18-21 14 15 10-13 12 19" />
+        <path d="M54 17l-9 18 12 7-11 17 14 8-10 16" />
+        <circle cx="35" cy="34" r="6" />
+      </svg>
+    </div>
 
     <!-- Bottom info + progress — desktop: bottom 25vh for large seek target -->
     <div
