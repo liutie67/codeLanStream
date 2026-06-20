@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchFeed, fetchRandom, getStreamUrl, getPreviewUrl, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
+import { fetchFeed, fetchRandom, getStreamUrl, getPreviewUrl, getThumbnailUrl, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useSwipe, type SwipeDirection } from '../composables/useSwipe'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import VideoProgress from './VideoProgress.vue'
+import {
+  createDetachedVideoPreloader,
+  createPreloadImage,
+  releaseImageElement,
+  releaseMediaElement,
+  updateDetachedVideoPreload,
+} from '../utils/mediaResource'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -24,8 +31,8 @@ const isLocked = ref(false)
 const browseMode = ref<BrowseMode>('random')
 const orderedPage = ref(1)
 const folderAnchor = ref<string | null>(null)
-const PRELOAD_COUNT = 3
-const PRELOAD_RETAIN_BEFORE = 1
+const PRELOAD_COUNT = 4
+const VIDEO_AUTO_PRELOAD_DISTANCE = 1
 const LOAD_BATCH_SIZE = 20
 
 // Phase: 'idle' = CSS transitions on, 'dragging' = no transitions, 'animating' = transitions on
@@ -48,14 +55,6 @@ const nextItem = computed(() => currentIndex.value < items.value.length - 1 ? it
 const preloadWindowItems = computed(() => {
   const start = currentIndex.value + 1
   return items.value.slice(start, start + PRELOAD_COUNT)
-})
-const preloadItems = computed(() => {
-  const start = currentIndex.value + 2
-  const end = Math.min(currentIndex.value + 1 + PRELOAD_COUNT, items.value.length)
-  return items.value.slice(start, end).map((item, i) => ({
-    item,
-    offset: start + i,
-  }))
 })
 const containerRef = ref<HTMLElement>()
 const browseModes: Array<{ mode: BrowseMode; label: string; title: string }> = [
@@ -99,6 +98,24 @@ const keyBorderStyle = computed(() => {
   }
   return {}
 })
+
+function getVideoPosterUrl(item: MediaItem): string | null {
+  if (item.media_type !== 'video') return null
+  if (thumbMode.value === 'grid' && item.preview_path) return getPreviewUrl(item.id)
+  if (item.thumbnail_path) return getThumbnailUrl(item.id)
+  if (item.preview_path) return getPreviewUrl(item.id)
+  return null
+}
+
+function getPassiveMediaUrl(item: MediaItem | null): string | null {
+  if (!item) return null
+  if (item.media_type === 'image') return getStreamUrl(item.id)
+  return getVideoPosterUrl(item)
+}
+
+const prevDisplayUrl = computed(() => getPassiveMediaUrl(prevItem.value))
+const nextDisplayUrl = computed(() => getPassiveMediaUrl(nextItem.value))
+const currentVideoPosterUrl = computed(() => current.value ? getVideoPosterUrl(current.value) : null)
 const shortcutGroups = [
   {
     title: '浏览',
@@ -129,8 +146,9 @@ const shortcutGroups = [
 ]
 
 interface PreloadEntry {
-  preview?: HTMLImageElement
+  image?: HTMLImageElement
   video?: HTMLVideoElement
+  videoPreload?: 'metadata' | 'auto'
 }
 
 const preloadedMedia = new Map<string, PreloadEntry>()
@@ -145,37 +163,39 @@ function ensurePreloadEntry(item: MediaItem): PreloadEntry {
   return entry
 }
 
-function preloadVideoItem(item: MediaItem) {
+function preloadMediaItem(item: MediaItem, distance: number) {
+  const entry = ensurePreloadEntry(item)
+  const imageUrl = getPassiveMediaUrl(item)
+
+  if (imageUrl && !entry.image) {
+    entry.image = createPreloadImage(imageUrl)
+  }
+
   if (item.media_type !== 'video') return
 
-  const entry = ensurePreloadEntry(item)
-
-  if (item.preview_path && !entry.preview) {
-    const preview = new Image()
-    preview.decoding = 'async'
-    preview.src = getPreviewUrl(item.id)
-    entry.preview = preview
+  const preload = distance <= VIDEO_AUTO_PRELOAD_DISTANCE ? 'auto' : 'metadata'
+  if (entry.video) {
+    updateDetachedVideoPreload(entry.video, preload)
+    entry.videoPreload = preload
+    return
   }
 
-  if (!entry.video) {
-    const video = document.createElement('video')
-    video.preload = 'auto'
-    video.muted = true
-    video.playsInline = true
-    video.setAttribute('playsinline', 'true')
-    video.src = getStreamUrl(item.id)
-    video.load()
-    entry.video = video
-  }
+  entry.video = createDetachedVideoPreloader(getStreamUrl(item.id), preload)
+  entry.videoPreload = preload
 }
 
 function releasePreloadEntry(entry: PreloadEntry) {
-  if (entry.video) {
-    entry.video.pause()
-    entry.video.removeAttribute('src')
-    entry.video.load()
-  }
-  entry.preview?.removeAttribute('src')
+  releaseMediaElement(entry.video)
+  releaseImageElement(entry.image)
+}
+
+function releasePreloadForId(id: string | null | undefined) {
+  if (!id) return
+  const entry = preloadedMedia.get(id)
+  if (!entry) return
+
+  releasePreloadEntry(entry)
+  preloadedMedia.delete(id)
 }
 
 function clearPreloadCache() {
@@ -199,17 +219,10 @@ function schedulePreload() {
     if (version !== preloadVersion) return
 
     const retainedIds = new Set<string>()
-    const retainStart = Math.max(0, currentIndex.value - PRELOAD_RETAIN_BEFORE)
-    for (let i = retainStart; i < currentIndex.value; i++) {
-      const item = items.value[i]
-      if (item?.media_type === 'video') retainedIds.add(item.id)
-    }
-
-    for (const item of preloadWindowItems.value) {
-      if (item.media_type !== 'video') continue
+    preloadWindowItems.value.forEach((item, index) => {
       retainedIds.add(item.id)
-      preloadVideoItem(item)
-    }
+      preloadMediaItem(item, index + 1)
+    })
 
     prunePreloadCache(retainedIds)
   }, 0)
@@ -405,6 +418,7 @@ async function loadMore() {
 }
 
 function resetRoamingItems() {
+  releaseMediaElement(videoEl.value)
   clearPreloadCache()
   items.value = []
   loadedIds.value = new Set()
@@ -413,6 +427,7 @@ function resetRoamingItems() {
   orderedPage.value = 1
   lastAction.value = null
   pendingKeyAction.value = null
+  videoPaused.value = true
 }
 
 function toggleHideMarked() {
@@ -447,9 +462,21 @@ const feedbackColor = computed(() => {
 const feedbackOpacity = computed(() => Math.min(0.5, Math.abs(offsetX.value) / 200))
 
 // Video auto-play + volume persistence
-watch(current, async () => {
+watch(current, async (item, previousItem) => {
+  if (previousItem?.media_type === 'video') {
+    releaseMediaElement(videoEl.value)
+  }
+
   await nextTick()
-  if (videoEl.value) {
+
+  if (!item || current.value?.id !== item.id) {
+    videoPaused.value = true
+    schedulePreload()
+    return
+  }
+
+  if (item.media_type === 'video' && videoEl.value) {
+    releasePreloadForId(item.id)
     const wantMuted = isMuted.value
     videoEl.value.muted = true
     videoEl.value.volume = userVolume.value || 1
@@ -467,6 +494,8 @@ watch(current, async () => {
         videoPaused.value = false
       } catch { /* autoplay blocked */ }
     }
+  } else {
+    videoPaused.value = true
   }
   if (currentIndex.value >= items.value.length - 8) loadMore()
   schedulePreload()
@@ -539,6 +568,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   detach()
+  releaseMediaElement(videoEl.value)
   clearPreloadCache()
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('keyup', onKeyup)
@@ -666,6 +696,7 @@ onUnmounted(() => {
       <!-- Previous item (above viewport) -->
       <div
         v-if="prevItem"
+        :key="`prev-${prevItem.id}`"
         class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
         :style="{
           transform: `translateY(calc(-100% + ${offsetY}px))`,
@@ -673,17 +704,16 @@ onUnmounted(() => {
         }"
       >
         <img
-          v-if="prevItem.media_type === 'image'"
-          :src="getStreamUrl(prevItem.id)"
+          v-if="prevDisplayUrl"
+          :src="prevDisplayUrl"
           class="max-w-full max-h-full object-contain rounded-lg"
         />
-        <video
+        <div
           v-else
-          :src="getStreamUrl(prevItem.id)"
-          muted
-          playsinline
-          class="max-w-full max-h-full rounded-lg"
-        />
+          class="flex aspect-video w-full max-w-4xl items-center justify-center rounded-lg bg-black"
+        >
+          <svg class="w-16 h-16 text-white/55" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+        </div>
       </div>
 
       <!-- Current item (centered, follows swipe) -->
@@ -705,6 +735,7 @@ onUnmounted(() => {
           v-else
           ref="videoEl"
           :src="getStreamUrl(current.id)"
+          :poster="currentVideoPosterUrl || undefined"
           preload="auto"
           muted
           loop
@@ -716,12 +747,12 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
         <div
-          v-if="current.media_type === 'video' && thumbMode === 'grid' && videoPaused && current.preview_path"
+          v-if="current.media_type === 'video' && thumbMode === 'grid' && videoPaused && currentVideoPosterUrl"
           class="absolute inset-0 flex items-center justify-center cursor-pointer"
           @click.stop="videoEl && videoEl.play()"
         >
           <img
-            :src="getPreviewUrl(current.id)"
+            :src="currentVideoPosterUrl"
             class="max-w-full max-h-full object-contain rounded-lg"
           />
           <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -743,6 +774,7 @@ onUnmounted(() => {
       <!-- Next item (below viewport) -->
       <div
         v-if="nextItem"
+        :key="`next-${nextItem.id}`"
         class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
         :style="{
           transform: `translateY(calc(100% + ${offsetY}px))`,
@@ -750,36 +782,16 @@ onUnmounted(() => {
         }"
       >
         <img
-          v-if="nextItem.media_type === 'image'"
-          :src="getStreamUrl(nextItem.id)"
+          v-if="nextDisplayUrl"
+          :src="nextDisplayUrl"
           class="max-w-full max-h-full object-contain rounded-lg"
         />
-        <video
+        <div
           v-else
-          :src="getStreamUrl(nextItem.id)"
-          preload="auto"
-          muted
-          playsinline
-          class="max-w-full max-h-full rounded-lg"
-        />
-      </div>
-
-      <!-- Preload items (off-screen, hidden) -->
-      <div
-        v-for="{ item, offset } in preloadItems"
-        :key="item.id"
-        class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
-        :style="{
-          transform: `translateY(${(offset - currentIndex) * 100}%)`,
-          visibility: 'hidden',
-          pointerEvents: 'none',
-        }"
-      >
-        <img
-          v-if="item.media_type === 'image'"
-          :src="getStreamUrl(item.id)"
-          class="max-w-full max-h-full object-contain rounded-lg"
-        />
+          class="flex aspect-video w-full max-w-4xl items-center justify-center rounded-lg bg-black"
+        >
+          <svg class="w-16 h-16 text-white/55" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+        </div>
       </div>
 
       <div v-if="!current && loading" class="absolute inset-0 flex items-center justify-center text-white/50">加载中...</div>

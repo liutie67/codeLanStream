@@ -6,6 +6,7 @@ import { useColumnLayout } from '../composables/useColumnLayout'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import VideoProgress from './VideoProgress.vue'
+import { releaseMediaElement } from '../utils/mediaResource'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -90,11 +91,12 @@ async function toggleFav(item: MediaItem) {
 }
 
 function closePreview() {
+  releaseMediaElement(previewVideoEl.value)
   previewItem.value = null
 }
 
 function onPreviewKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') previewItem.value = null
+  if (e.key === 'Escape') closePreview()
 }
 
 function setupSeenObserver() {
@@ -186,6 +188,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  releaseMediaElement(previewVideoEl.value)
   seenObserver?.disconnect()
   scrollObserver?.disconnect()
   window.removeEventListener('keydown', onPreviewKeydown)
@@ -268,13 +271,13 @@ onUnmounted(() => {
                   class="w-full block"
                   loading="lazy"
                 />
-                <video
+                <div
                   v-else
-                  :src="getStreamUrl(item.id)"
-                  preload="metadata"
-                  class="w-full block"
-                  muted
-                />
+                  class="w-full bg-black flex items-center justify-center"
+                  style="aspect-ratio: 16/9"
+                >
+                  <span class="text-white text-[10px]">还未生成</span>
+                </div>
               </template>
               <div class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
                 <svg class="w-8 h-8 text-white/70" fill="currentColor" viewBox="0 0 24 24">

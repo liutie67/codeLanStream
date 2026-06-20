@@ -59,13 +59,13 @@ async function onDelete(e: MouseEvent) {
             class="w-full block"
             loading="lazy"
           />
-          <video
+          <div
             v-else
-            :src="getStreamUrl(item.id)"
-            preload="metadata"
-            class="w-full block"
-            muted
-          />
+            class="w-full bg-black flex items-center justify-center"
+            style="aspect-ratio: 16/9"
+          >
+            <span class="text-white text-xs text-center px-2">还未生成对应缩略图</span>
+          </div>
         </template>
         <div class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors pointer-events-none">
           <svg class="w-10 h-10 text-white/70" fill="currentColor" viewBox="0 0 24 24">

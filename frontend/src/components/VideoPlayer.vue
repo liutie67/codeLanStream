@@ -1,16 +1,22 @@
 <script setup lang="ts">
 import type { MediaItem } from '../api/types'
 import { getStreamUrl } from '../api/client'
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import VideoProgress from './VideoProgress.vue'
+import { releaseMediaElement } from '../utils/mediaResource'
 
 const props = defineProps<{ item: MediaItem }>()
 const emit = defineEmits<{ close: [] }>()
 const videoEl = ref<HTMLVideoElement | null>(null)
 const videoPaused = ref(true)
 
+function closePlayer() {
+  releaseMediaElement(videoEl.value)
+  emit('close')
+}
+
 function onBackdropClick(e: MouseEvent) {
-  if (e.target === e.currentTarget) emit('close')
+  if (e.target === e.currentTarget) closePlayer()
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -19,11 +25,17 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'k') videoEl.value.currentTime = Math.min(videoEl.value.duration || 0, videoEl.value.currentTime + 30)
 }
 
-watch(() => props.item, () => {
-  window.addEventListener('keydown', onKeydown)
-}, { immediate: true })
+watch(() => props.item.id, () => {
+  releaseMediaElement(videoEl.value)
+  videoPaused.value = true
+})
 
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onMounted(() => window.addEventListener('keydown', onKeydown))
+
+onUnmounted(() => {
+  releaseMediaElement(videoEl.value)
+  window.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <template>
@@ -32,7 +44,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
     @click="onBackdropClick"
   >
     <button
-      @click="emit('close')"
+      @click="closePlayer"
       class="fixed top-4 right-4 text-white/70 hover:text-white text-3xl z-10"
     >
       &times;
@@ -65,7 +77,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       v-else
       :src="getStreamUrl(item.id)"
       class="max-w-full max-h-full object-contain rounded-lg cursor-pointer"
-      @click="emit('close')"
+      @click="closePlayer"
     />
   </div>
 </template>

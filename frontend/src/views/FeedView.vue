@@ -13,14 +13,15 @@ import VideoPlayer from '../components/VideoPlayer.vue'
 import FolderBrowser from '../components/FolderBrowser.vue'
 import RoamingView from '../components/RoamingView.vue'
 import TurboView from '../components/TurboView.vue'
+import { createPreloadImage, releaseImageElement } from '../utils/mediaResource'
 
 type ColumnMode = 'auto' | '1' | '2'
 
 const LOAD_AHEAD_PX = 2800
-const PREFETCH_CONCURRENCY = 6
-const PREFETCH_LOOKBACK = 16
-const PREFETCH_MAX_ITEMS = 120
-const PREFETCH_URL_CACHE_LIMIT = 360
+const PREFETCH_CONCURRENCY = 3
+const PREFETCH_LOOKBACK = 8
+const PREFETCH_MAX_ITEMS = 48
+const PREFETCH_URL_CACHE_LIMIT = 180
 
 const { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
@@ -41,6 +42,7 @@ const { columns, updateItem } = useColumnLayout(items, colCount)
 const columnRef = ref<HTMLElement>()
 const prefetchedUrls = new Set<string>()
 const prefetchQueue: string[] = []
+const activePrefetchImages = new Set<HTMLImageElement>()
 let prefetchActive = 0
 let nextPrefetchIndex = 0
 let stopped = false
@@ -104,16 +106,23 @@ function enqueuePreload(url: string) {
   pumpPreloadQueue()
 }
 
+function clearActivePrefetches() {
+  for (const image of activePrefetchImages) releaseImageElement(image)
+  activePrefetchImages.clear()
+  prefetchActive = 0
+}
+
 function pumpPreloadQueue() {
   if (stopped) return
   while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length) {
     const url = prefetchQueue.shift()
     if (!url) return
     prefetchActive++
-    const img = new Image()
-    img.decoding = 'async'
+    const img = createPreloadImage()
+    activePrefetchImages.add(img)
     img.onload = img.onerror = () => {
-      prefetchActive--
+      activePrefetchImages.delete(img)
+      prefetchActive = Math.max(0, prefetchActive - 1)
       pumpPreloadQueue()
     }
     img.src = url
@@ -123,6 +132,7 @@ function pumpPreloadQueue() {
 function prefetchAhead(reset = false) {
   if (reset) {
     prefetchQueue.length = 0
+    clearActivePrefetches()
     nextPrefetchIndex = 0
   }
 
@@ -160,6 +170,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopped = true
   prefetchQueue.length = 0
+  clearActivePrefetches()
   window.removeEventListener('scroll', onScroll)
 })
 </script>

@@ -6,6 +6,7 @@ import { fetchFeed, getThumbnailUrl, getStreamUrl, getPreviewUrl, purgeDeleted, 
 import { useTheme } from '../composables/useTheme'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import VideoProgress from '../components/VideoProgress.vue'
+import { releaseMediaElement } from '../utils/mediaResource'
 
 type ThumbSize = 'small' | 'medium' | 'large'
 
@@ -221,6 +222,7 @@ function openPreview(item: MediaItem) {
 }
 
 function closePreview() {
+  releaseMediaElement(previewVideoEl.value)
   previewItem.value = null
 }
 
@@ -257,6 +259,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  releaseMediaElement(previewVideoEl.value)
   observer?.disconnect()
   window.removeEventListener('keydown', onPreviewKeydown)
 })
@@ -433,13 +436,13 @@ onUnmounted(() => {
             >
               <span class="text-white text-[8px] text-center leading-tight px-1">未生成</span>
             </div>
-            <video
+            <div
               v-else
-              :src="getStreamUrl(item.id)"
-              preload="metadata"
               :class="[thumbClasses, 'object-cover rounded shrink-0']"
-              muted
-            />
+              class="bg-black flex items-center justify-center"
+            >
+              <span class="text-white text-[8px] text-center leading-tight px-1">未生成</span>
+            </div>
           </template>
           <div class="flex-1 min-w-0">
             <p class="text-sm truncate">{{ item.file_path.split(/[/\\]/).pop() }}</p>
