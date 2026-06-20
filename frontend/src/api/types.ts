@@ -65,6 +65,12 @@ export interface ImportMediaRequest {
   workers?: number | null
 }
 
+export interface ImportTargetInfo {
+  path: string
+  is_existing_library_path: boolean
+  existing_count: number
+}
+
 export interface ImportMediaResponse {
   root_dir: string
   scanned_files: number

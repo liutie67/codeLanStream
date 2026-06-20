@@ -4,6 +4,7 @@ import type {
   FeedResponse,
   ImportJobProgress,
   ImportMediaRequest,
+  ImportTargetInfo,
   MediaItem,
   RandomResponse,
   ExportTag,
@@ -163,6 +164,23 @@ export async function importMediaFolder(body: ImportMediaRequest): Promise<Impor
       message = await res.text() || message
     }
     throw new Error(message || `导入失败: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchImportTargetInfo(path: string): Promise<ImportTargetInfo> {
+  const search = new URLSearchParams()
+  search.set('path', path)
+  const res = await fetch(`${API_BASE}/manage/import-target?${search}`)
+  if (!res.ok) {
+    let message = `导入目标检查失败: ${res.status}`
+    try {
+      const data = await res.json()
+      message = data.detail || message
+    } catch {
+      message = await res.text() || message
+    }
+    throw new Error(message)
   }
   return res.json()
 }

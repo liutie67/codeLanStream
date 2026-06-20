@@ -4,10 +4,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.media import MediaType
+from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse
 from app.services.import_jobs import get_import_job, start_import_job
 from app.services.media import (
@@ -226,6 +227,12 @@ class ImportRequest(BaseModel):
     workers: int | None = Field(default=None, ge=1, le=16)
 
 
+class ImportTargetInfo(BaseModel):
+    path: str
+    is_existing_library_path: bool
+    existing_count: int
+
+
 @router.post("/manage/purge")
 async def purge(db: AsyncSession = Depends(get_db)):
     count = await purge_deleted(db)
@@ -281,6 +288,31 @@ async def list_directories(path: str | None = None):
         "parent": parent,
         "directories": directories,
     }
+
+
+@router.get("/manage/import-target", response_model=ImportTargetInfo)
+async def import_target(path: str, db: AsyncSession = Depends(get_db)):
+    if not path.strip():
+        raise HTTPException(400, "Path is required")
+
+    target = Path(path).expanduser().resolve()
+    target_path = str(target)
+    target_prefix = target_path + os.sep
+    result = await db.execute(
+        select(func.count(Media.id)).where(
+            or_(
+                Media.root_dir == target_path,
+                Media.folder == target_path,
+                Media.folder.startswith(target_prefix),
+            )
+        )
+    )
+    existing_count = result.scalar_one()
+    return ImportTargetInfo(
+        path=target_path,
+        is_existing_library_path=existing_count > 0,
+        existing_count=existing_count,
+    )
 
 
 @router.post("/manage/import")

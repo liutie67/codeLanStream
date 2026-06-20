@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { DirectoryListResponse, ImportJobProgress, ImportMediaResponse, MediaType } from '../api/types'
-import { fetchDirectories, fetchImportProgress, importMediaFolder } from '../api/client'
+import type { DirectoryListResponse, ImportJobProgress, ImportMediaRequest, ImportMediaResponse, MediaType } from '../api/types'
+import { fetchDirectories, fetchImportProgress, fetchImportTargetInfo, importMediaFolder } from '../api/client'
 import { useTheme } from '../composables/useTheme'
 
 const emit = defineEmits<{ close: []; imported: [result: ImportMediaResponse] }>()
@@ -11,6 +11,7 @@ const path = ref('')
 const directoryList = ref<DirectoryListResponse | null>(null)
 const loadingDirs = ref(false)
 const importing = ref(false)
+const checkingTarget = ref(false)
 const error = ref('')
 const result = ref<ImportMediaResponse | null>(null)
 const progress = ref<ImportJobProgress | null>(null)
@@ -29,8 +30,23 @@ const typeOptions: { value: MediaType | 'all'; label: string }[] = [
   { value: 'image', label: '图片' },
 ]
 
-const canImport = computed(() => path.value.trim().length > 0 && !importing.value)
+type ImportConfirmState = {
+  level: 'existing' | 'new'
+  path: string
+  existingCount: number
+}
+
+const importConfirm = ref<ImportConfirmState | null>(null)
+const canImport = computed(() => path.value.trim().length > 0 && !importing.value && !checkingTarget.value)
+const confirmIsNew = computed(() => importConfirm.value?.level === 'new')
 const progressStats = computed(() => progress.value?.stats || result.value)
+const importOptionsSummary = computed(() => [
+  recursive.value ? '递归扫描子目录' : '仅扫描当前目录',
+  skipHidden.value ? '跳过隐藏文件' : '包含隐藏文件',
+  backfillExisting.value ? '补齐已有媒体' : '不补齐已有媒体',
+  preview.value ? `生成预览，并发 ${workers.value}` : '仅生成首帧',
+  mediaType.value === 'all' ? '导入全部类型' : mediaType.value === 'video' ? '仅导入视频' : '仅导入图片',
+])
 const stageLabel = computed(() => {
   switch (progress.value?.stage) {
     case 'queued': return '等待开始'
@@ -44,6 +60,18 @@ const stageLabel = computed(() => {
     default: return '未开始'
   }
 })
+
+function buildImportRequest(targetPath: string): ImportMediaRequest {
+  return {
+    path: targetPath,
+    preview: preview.value,
+    media_type: mediaType.value === 'all' ? null : mediaType.value,
+    recursive: recursive.value,
+    skip_hidden: skipHidden.value,
+    backfill_existing: backfillExisting.value,
+    workers: preview.value ? workers.value : null,
+  }
+}
 
 async function loadDirectory(target?: string) {
   loadingDirs.value = true
@@ -59,23 +87,44 @@ async function loadDirectory(target?: string) {
   }
 }
 
-async function submit() {
+async function requestImportConfirmation() {
   if (!canImport.value) return
+  checkingTarget.value = true
+  error.value = ''
+  try {
+    const target = await fetchImportTargetInfo(path.value.trim())
+    importConfirm.value = {
+      level: target.is_existing_library_path ? 'existing' : 'new',
+      path: target.path,
+      existingCount: target.existing_count,
+    }
+  } catch (e: any) {
+    error.value = e.message || '导入目标检查失败'
+  } finally {
+    checkingTarget.value = false
+  }
+}
+
+function cancelImportConfirm() {
+  importConfirm.value = null
+}
+
+async function confirmImport() {
+  const targetPath = importConfirm.value?.path
+  if (!targetPath) return
+  importConfirm.value = null
+  await submit(targetPath)
+}
+
+async function submit(targetPath: string) {
+  if (importing.value) return
   stopPolling()
   importing.value = true
   error.value = ''
   result.value = null
   progress.value = null
   try {
-    const job = await importMediaFolder({
-      path: path.value.trim(),
-      preview: preview.value,
-      media_type: mediaType.value === 'all' ? null : mediaType.value,
-      recursive: recursive.value,
-      skip_hidden: skipHidden.value,
-      backfill_existing: backfillExisting.value,
-      workers: preview.value ? workers.value : null,
-    })
+    const job = await importMediaFolder(buildImportRequest(targetPath))
     progress.value = job
     startPolling(job.id)
   } catch (e: any) {
@@ -119,12 +168,15 @@ async function pollProgress(jobId: string) {
 }
 
 onMounted(() => loadDirectory())
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  cancelImportConfirm()
+  stopPolling()
+})
 </script>
 
 <template>
   <Teleport to="body">
-    <div class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-3" @click.self="emit('close')">
+    <div class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-3" @click.self="importConfirm ? cancelImportConfirm() : emit('close')">
       <section
         :class="[
           'w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col',
@@ -338,14 +390,105 @@ onUnmounted(stopPolling)
             关闭
           </button>
           <button
-            @click="submit"
+            @click="requestImportConfirmation"
             :disabled="!canImport"
             class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
           >
-            {{ importing ? '导入中...' : '导入' }}
+            {{ importing ? '导入中...' : checkingTarget ? '检查中...' : '导入' }}
           </button>
         </footer>
       </section>
+
+      <div
+        v-if="importConfirm"
+        class="absolute inset-0 z-20 flex items-center justify-center bg-black/85 p-4"
+        @click.self="cancelImportConfirm"
+      >
+        <section
+          :class="[
+            'w-full max-w-2xl overflow-hidden rounded-lg border-2 shadow-2xl',
+            confirmIsNew
+              ? 'border-red-500 bg-red-950 text-white shadow-red-950/60'
+              : 'border-amber-400 bg-gray-950 text-white shadow-amber-950/40',
+          ]"
+        >
+          <div
+            :class="[
+              'px-5 py-4 border-b flex items-start gap-4',
+              confirmIsNew ? 'border-red-400/40 bg-red-600/25' : 'border-amber-300/30 bg-amber-500/15',
+            ]"
+          >
+            <svg
+              :class="['mt-0.5 shrink-0', confirmIsNew ? 'h-16 w-16 text-red-200' : 'h-12 w-12 text-amber-200']"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+              <path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+            </svg>
+            <div class="min-w-0">
+              <p :class="['font-black leading-tight', confirmIsNew ? 'text-2xl' : 'text-xl']">
+                {{ confirmIsNew ? '全新目录导入确认' : '已入库目录追加确认' }}
+              </p>
+              <p :class="['mt-2 text-sm leading-6', confirmIsNew ? 'text-red-50' : 'text-amber-50/90']">
+                <template v-if="confirmIsNew">
+                  这个目录当前没有任何入库记录。确认后会把它作为新的媒体来源扫描，可能批量新增大量媒体和处理任务。
+                </template>
+                <template v-else>
+                  这个目录下已有 {{ importConfirm.existingCount }} 个入库媒体。确认后会按当前选项扫描新增媒体并补齐已有记录。
+                </template>
+              </p>
+            </div>
+          </div>
+
+          <div class="space-y-4 px-5 py-4">
+            <div :class="['rounded-lg border p-3', confirmIsNew ? 'border-red-300/40 bg-black/25' : 'border-white/10 bg-white/5']">
+              <p class="mb-1 text-xs font-semibold text-white/55">目标路径</p>
+              <p class="break-all font-mono text-sm text-white">{{ importConfirm.path }}</p>
+            </div>
+
+            <div class="grid gap-2 sm:grid-cols-2">
+              <div
+                v-for="item in importOptionsSummary"
+                :key="item"
+                :class="[
+                  'rounded border px-3 py-2 text-xs font-medium',
+                  confirmIsNew ? 'border-red-300/35 bg-red-500/10 text-red-50' : 'border-white/10 bg-white/5 text-white/75',
+                ]"
+              >
+                {{ item }}
+              </div>
+            </div>
+
+            <p :class="['rounded-lg px-3 py-2 text-sm font-semibold', confirmIsNew ? 'bg-red-500 text-white' : 'bg-amber-400 text-gray-950']">
+              {{ confirmIsNew ? '请确认这不是误点：这会创建新的入库来源。' : '请再次确认：这会修改现有媒体库记录。' }}
+            </p>
+          </div>
+
+          <footer class="flex flex-col-reverse gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:justify-end">
+            <button
+              @click="cancelImportConfirm"
+              class="px-4 py-2 rounded-lg border border-white/15 text-sm font-medium text-white/80 hover:bg-white/10 transition-colors"
+            >
+              取消，不导入
+            </button>
+            <button
+              @click="confirmImport"
+              :class="[
+                'px-5 py-2 rounded-lg text-sm font-black text-white transition-colors',
+                confirmIsNew ? 'bg-red-600 hover:bg-red-500' : 'bg-amber-500 hover:bg-amber-400 !text-gray-950',
+              ]"
+            >
+              {{ confirmIsNew ? '确认全新导入' : '确认追加导入' }}
+            </button>
+          </footer>
+        </section>
+      </div>
     </div>
   </Teleport>
 </template>
