@@ -63,6 +63,20 @@ const exportSelectionLabel = computed(() => (
     : '未选择'
 ))
 
+function formatMediaSize(bytes: number) {
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  const formatter = new Intl.NumberFormat('zh-CN', {
+    maximumFractionDigits: value >= 100 ? 0 : value >= 10 ? 1 : 2,
+  })
+  return `${formatter.format(value)}${units[unitIndex]}`
+}
+
 function cycleThumbSize() {
   const sizes: ThumbSize[] = ['small', 'medium', 'large']
   thumbSize.value = sizes[(sizes.indexOf(thumbSize.value) + 1) % 3]
@@ -429,7 +443,7 @@ onUnmounted(() => {
           </template>
           <div class="flex-1 min-w-0">
             <p class="text-sm truncate">{{ item.file_path.split(/[/\\]/).pop() }}</p>
-            <p class="text-xs text-gray-500">{{ item.media_type }} · {{ (item.size_bytes / 1024).toFixed(0) }}KB</p>
+            <p class="text-xs text-gray-500">{{ item.media_type }} · {{ formatMediaSize(item.size_bytes) }}</p>
           </div>
           <div class="flex items-center gap-2 shrink-0" @click.stop>
             <span v-if="item.is_favorited" class="text-xs text-pink-400">已收藏</span>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchRandom, getStreamUrl, getPreviewUrl, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
+import { fetchFeed, fetchRandom, getStreamUrl, getPreviewUrl, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useSwipe, type SwipeDirection } from '../composables/useSwipe'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
@@ -11,6 +11,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const { thumbMode } = useThumbnailMode()
 type MarkAction = 'favorite' | 'delete' | 'damage'
+type BrowseMode = 'random' | 'folder' | 'size'
 
 const items = ref<MediaItem[]>([])
 const currentIndex = ref(0)
@@ -20,8 +21,12 @@ const hideMarked = ref(false)
 const loading = ref(false)
 const hasMore = ref(true)
 const isLocked = ref(false)
+const browseMode = ref<BrowseMode>('random')
+const orderedPage = ref(1)
+const folderAnchor = ref<string | null>(null)
 const PRELOAD_COUNT = 3
 const PRELOAD_RETAIN_BEFORE = 1
+const LOAD_BATCH_SIZE = 20
 
 // Phase: 'idle' = CSS transitions on, 'dragging' = no transitions, 'animating' = transitions on
 const phase = ref<'idle' | 'dragging' | 'animating'>('idle')
@@ -53,8 +58,16 @@ const preloadItems = computed(() => {
   }))
 })
 const containerRef = ref<HTMLElement>()
+const browseModes: Array<{ mode: BrowseMode; label: string; title: string }> = [
+  { mode: 'random', label: '随机', title: '当前: 随机刷取，点击切换到同文件夹连续' },
+  { mode: 'folder', label: '文件夹', title: '当前: 同文件夹连续，点击切换到按大小倒序' },
+  { mode: 'size', label: '大小', title: '当前: 按大小从大到小，点击切换到随机' },
+]
 
 const hasTransition = computed(() => phase.value !== 'dragging')
+const currentBrowseMode = computed(() => (
+  browseModes.find(item => item.mode === browseMode.value) || browseModes[0]
+))
 const currentBackground = computed(() => {
   if (!current.value) return 'black'
   if (current.value.is_damaged) return 'rgba(168,85,247,1)'
@@ -343,38 +356,84 @@ async function loadMore() {
   if (loading.value || !hasMore.value) return
   loading.value = true
   try {
-    const res = await fetchRandom(
-      20, [...loadedIds.value], mediaType.value,
-      hideMarked.value ? false : null,
-      hideMarked.value ? false : null,
-      hideMarked.value ? false : null,
-    )
-    for (const item of res.items) loadedIds.value.add(item.id)
-    items.value.push(...res.items)
-    if (res.items.length < 20) hasMore.value = false
+    let nextItems: MediaItem[] = []
+    if (browseMode.value === 'random') {
+      const res = await fetchRandom(
+        LOAD_BATCH_SIZE, [...loadedIds.value], mediaType.value,
+        hideMarked.value ? false : null,
+        hideMarked.value ? false : null,
+        hideMarked.value ? false : null,
+      )
+      nextItems = res.items
+      if (res.items.length < LOAD_BATCH_SIZE) hasMore.value = false
+    } else {
+      if (browseMode.value === 'folder' && !folderAnchor.value) {
+        folderAnchor.value = current.value?.folder || items.value[0]?.folder || null
+      }
+      if (browseMode.value === 'folder' && !folderAnchor.value) {
+        hasMore.value = false
+        return
+      }
+
+      const params: Parameters<typeof fetchFeed>[0] = {
+        page: orderedPage.value,
+        page_size: LOAD_BATCH_SIZE,
+        ...(mediaType.value && { media_type: mediaType.value }),
+        ...(hideMarked.value && { is_favorited: false, is_deleted: false, is_damaged: false }),
+        ...(browseMode.value === 'folder' && {
+          folder: folderAnchor.value || undefined,
+          folder_exact: true,
+          sort: 'file_path_asc',
+        }),
+        ...(browseMode.value === 'size' && { sort: 'size_desc' }),
+      }
+      const res = await fetchFeed(params)
+      nextItems = res.items
+      hasMore.value = res.has_next
+      orderedPage.value++
+    }
+
+    for (const item of nextItems) {
+      if (loadedIds.value.has(item.id)) continue
+      loadedIds.value.add(item.id)
+      items.value.push(item)
+    }
     schedulePreload()
   } finally {
     loading.value = false
   }
 }
 
-function toggleHideMarked() {
-  hideMarked.value = !hideMarked.value
+function resetRoamingItems() {
   clearPreloadCache()
   items.value = []
   loadedIds.value = new Set()
   currentIndex.value = 0
   hasMore.value = true
+  orderedPage.value = 1
+  lastAction.value = null
+  pendingKeyAction.value = null
+}
+
+function toggleHideMarked() {
+  hideMarked.value = !hideMarked.value
+  resetRoamingItems()
   loadMore()
 }
 
 function setMediaType(type: MediaType | null) {
   mediaType.value = type
-  clearPreloadCache()
-  items.value = []
-  loadedIds.value = new Set()
-  currentIndex.value = 0
-  hasMore.value = true
+  resetRoamingItems()
+  loadMore()
+}
+
+function cycleBrowseMode() {
+  const currentModeIndex = browseModes.findIndex(item => item.mode === browseMode.value)
+  const nextMode = browseModes[(currentModeIndex + 1) % browseModes.length].mode
+  const anchor = current.value?.folder || folderAnchor.value
+  browseMode.value = nextMode
+  folderAnchor.value = nextMode === 'folder' ? anchor : null
+  resetRoamingItems()
   loadMore()
 }
 
@@ -527,7 +586,45 @@ onUnmounted(() => {
         </button>
       </div>
       <TypeFilter :current="mediaType" @change="setMediaType" />
-      <span class="text-xs text-white/50 tabular-nums w-12 text-right">{{ currentIndex + 1 }}</span>
+      <div class="flex items-center justify-end gap-2">
+        <button
+          @click="cycleBrowseMode"
+          class="h-8 px-2.5 flex items-center gap-1.5 rounded-full bg-white/10 text-xs text-white/70 hover:text-white transition-colors"
+          :title="currentBrowseMode.title"
+        >
+          <svg
+            v-if="browseMode === 'random'"
+            class="w-4 h-4 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16 3h5v5M4 20l6.5-6.5M21 3l-7.5 7.5" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 16v5h-5M4 4l17 17" />
+          </svg>
+          <svg
+            v-else-if="browseMode === 'folder'"
+            class="w-4 h-4 shrink-0"
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
+          </svg>
+          <svg
+            v-else
+            class="w-4 h-4 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h12M4 12h8M4 17h4M18 6v12M15 15l3 3 3-3" />
+          </svg>
+          <span class="hidden sm:inline">{{ currentBrowseMode.label }}</span>
+        </button>
+        <span class="text-xs text-white/50 tabular-nums w-12 text-right">{{ currentIndex + 1 }}</span>
+      </div>
     </header>
 
     <div

@@ -11,7 +11,7 @@ from app.models.media import MediaType
 from app.schemas.media import FeedResponse
 from app.services.import_jobs import get_import_job, start_import_job
 from app.services.media import (
-    ExportTag, batch_update, browse_folders, export_favorites, export_media_by_tags,
+    ExportTag, FeedSort, batch_update, browse_folders, export_favorites, export_media_by_tags,
     get_feed, get_media,
     get_mime_type, get_random_media, parse_range, purge_deleted,
     toggle_damaged, toggle_deleted, toggle_favorite,
@@ -57,9 +57,22 @@ async def feed(
     is_favorited: bool | None = None,
     is_deleted: bool | None = None,
     is_damaged: bool | None = None,
+    folder_exact: bool = False,
+    sort: FeedSort = "created_desc",
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_feed(db, page, page_size, media_type, folder, is_favorited, is_deleted, is_damaged)
+    return await get_feed(
+        db,
+        page,
+        page_size,
+        media_type,
+        folder,
+        is_favorited,
+        is_deleted,
+        is_damaged,
+        folder_exact,
+        sort,
+    )
 
 
 class RandomRequest(BaseModel):

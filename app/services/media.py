@@ -15,6 +15,7 @@ from app.services.thumbnail import generate_thumbnail, generate_preview
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 ExportTag = Literal["favorited", "deleted", "damaged"]
+FeedSort = Literal["created_desc", "file_path_asc", "size_desc"]
 
 
 def _classify_media(ext: str) -> MediaType | None:
@@ -219,6 +220,8 @@ async def get_feed(
     is_favorited: bool | None = None,
     is_deleted: bool | None = None,
     is_damaged: bool | None = None,
+    folder_exact: bool = False,
+    sort: FeedSort = "created_desc",
 ) -> FeedResponse:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -227,8 +230,9 @@ async def get_feed(
         query = query.where(Media.media_type == media_type)
         count_query = count_query.where(Media.media_type == media_type)
     if folder:
-        query = query.where(Media.folder.contains(folder))
-        count_query = count_query.where(Media.folder.contains(folder))
+        folder_filter = Media.folder == folder if folder_exact else Media.folder.contains(folder)
+        query = query.where(folder_filter)
+        count_query = count_query.where(folder_filter)
     if is_favorited is not None:
         query = query.where(Media.is_favorited == is_favorited)
         count_query = count_query.where(Media.is_favorited == is_favorited)
@@ -242,7 +246,13 @@ async def get_feed(
     total = (await db.execute(count_query)).scalar_one()
     offset = (page - 1) * page_size
 
-    query = query.order_by(Media.created_at.desc()).offset(offset).limit(page_size + 1)
+    if sort == "file_path_asc":
+        query = query.order_by(Media.folder.asc(), Media.file_path.asc())
+    elif sort == "size_desc":
+        query = query.order_by(Media.size_bytes.desc(), Media.file_path.asc())
+    else:
+        query = query.order_by(Media.created_at.desc())
+    query = query.offset(offset).limit(page_size + 1)
     rows = (await db.execute(query)).scalars().all()
 
     has_next = len(rows) > page_size
