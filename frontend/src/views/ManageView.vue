@@ -34,7 +34,7 @@ const counts = ref({ all: 0, favorited: 0, deleted: 0, damaged: 0 })
 const sentinelRef = ref<HTMLElement>()
 let observer: IntersectionObserver | null = null
 
-const PAGE_SIZE = 300
+const PAGE_SIZE = 60
 const exportOptions: ExportTag[] = ['favorited', 'deleted', 'damaged']
 const exportLabelMap: Record<ExportTag, string> = {
   favorited: '已收藏',
@@ -418,17 +418,23 @@ onUnmounted(() => {
             v-if="item.media_type === 'image'"
             :src="getStreamUrl(item.id)"
             :class="[thumbClasses, 'object-cover rounded shrink-0']"
+            loading="lazy"
+            decoding="async"
           />
           <template v-else>
             <img
               v-if="thumbMode === 'grid' && item.preview_path"
               :src="getPreviewUrl(item.id)"
               :class="[thumbClasses, 'object-cover rounded shrink-0']"
+              loading="lazy"
+              decoding="async"
             />
             <img
               v-else-if="thumbMode !== 'grid' && item.thumbnail_path"
               :src="getThumbnailUrl(item.id)"
               :class="[thumbClasses, 'object-cover rounded shrink-0']"
+              loading="lazy"
+              decoding="async"
             />
             <div
               v-else-if="thumbMode === 'grid' && !item.preview_path"
