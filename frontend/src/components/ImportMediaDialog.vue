@@ -1,21 +1,38 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { DirectoryListResponse, ImportJobProgress, ImportMediaRequest, ImportMediaResponse, MediaType } from '../api/types'
-import { fetchDirectories, fetchImportProgress, fetchImportTargetInfo, importMediaFolder } from '../api/client'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { DirectoryListResponse, ImportMediaRequest, MediaType } from '../api/types'
+import { fetchDirectories, fetchImportTargetInfo } from '../api/client'
 import { useTheme } from '../composables/useTheme'
+import { useImportTask } from '../composables/useImportTask'
+import { isActiveImport } from '../composables/importTaskController'
 
-const emit = defineEmits<{ close: []; imported: [result: ImportMediaResponse] }>()
+const task = useImportTask()
+const { job: progress, locked: importing, connectionError, actionError, cancelling, unavailable } = task
+const result = computed(() => progress.value && !isActiveImport(progress.value) ? progress.value.stats : null)
+const dialogRoot = ref<HTMLElement | null>(null)
+const cancelConfirm = ref(false)
+const previousFocus = document.activeElement as HTMLElement | null
+const background = new Map<HTMLElement, boolean>()
+let backgroundObserver: MutationObserver | undefined
+function isolateBackground() {
+  for (const element of document.body.children) {
+    if (element instanceof HTMLElement && element !== dialogRoot.value && !background.has(element)) {
+      background.set(element, element.inert)
+      element.inert = true
+    }
+  }
+}
+function onFocusIn(event: FocusEvent) {
+  const surface = focusSurface()
+  if (surface && !surface.contains(event.target as Node)) surface.focus()
+}
 const { isDark } = useTheme()
 
 const path = ref('')
 const directoryList = ref<DirectoryListResponse | null>(null)
 const loadingDirs = ref(false)
-const importing = ref(false)
 const checkingTarget = ref(false)
 const error = ref('')
-const result = ref<ImportMediaResponse | null>(null)
-const progress = ref<ImportJobProgress | null>(null)
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const preview = ref(false)
 const mediaType = ref<MediaType | 'all'>('all')
@@ -57,7 +74,10 @@ const stageLabel = computed(() => {
     case 'committing': return '写入数据库'
     case 'completed': return '导入完成'
     case 'failed': return '导入失败'
-    default: return '未开始'
+    case 'cancelling': return '正在安全终止'
+    case 'cancelled': return '已安全终止'
+    case 'interrupted': return '导入已中断'
+    default: return importing.value ? '正在确认任务' : '未开始'
   }
 })
 
@@ -74,6 +94,7 @@ function buildImportRequest(targetPath: string): ImportMediaRequest {
 }
 
 async function loadDirectory(target?: string) {
+  if (importing.value) return
   loadingDirs.value = true
   error.value = ''
   try {
@@ -117,67 +138,80 @@ async function confirmImport() {
 }
 
 async function submit(targetPath: string) {
+  await task.start(buildImportRequest(targetPath))
+}
+
+function requestClose() {
   if (importing.value) return
-  stopPolling()
-  importing.value = true
-  error.value = ''
-  result.value = null
-  progress.value = null
-  try {
-    const job = await importMediaFolder(buildImportRequest(targetPath))
-    progress.value = job
-    startPolling(job.id)
-  } catch (e: any) {
-    error.value = e.message || '导入失败'
-    importing.value = false
+  if (importConfirm.value) cancelImportConfirm()
+  else task.close()
+}
+
+async function confirmCancel() {
+  cancelConfirm.value = false
+  await task.cancel()
+}
+
+function focusSurface() {
+  return dialogRoot.value?.querySelector<HTMLElement>('[data-confirm]') || dialogRoot.value
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    if (cancelConfirm.value) cancelConfirm.value = false
+    else requestClose()
   }
-}
-
-function startPolling(jobId: string) {
-  pollProgress(jobId)
-  pollTimer = setInterval(() => pollProgress(jobId), 800)
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-async function pollProgress(jobId: string) {
-  try {
-    const res = await fetchImportProgress(jobId)
-    progress.value = res
-    if (res.status === 'completed') {
-      stopPolling()
-      result.value = res.stats
-      importing.value = false
-      emit('imported', res.stats)
-    } else if (res.status === 'failed') {
-      stopPolling()
-      importing.value = false
-      error.value = res.error || '导入失败'
+  if (event.key === 'Tab') {
+    const surface = focusSurface()
+    const elements = [...(surface?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]') || [])]
+      .filter(el => el.getClientRects().length > 0)
+    const first = elements[0]
+    const last = elements[elements.length - 1]
+    if (!first) { event.preventDefault(); surface?.focus(); return }
+    if (event.shiftKey && (document.activeElement === first || !elements.includes(document.activeElement as HTMLElement))) {
+      event.preventDefault(); last?.focus()
+    } else if (!event.shiftKey && (document.activeElement === last || !elements.includes(document.activeElement as HTMLElement))) {
+      event.preventDefault(); first.focus()
     }
-  } catch (e: any) {
-    stopPolling()
-    importing.value = false
-    error.value = e.message || '进度读取失败'
-  } finally {
   }
 }
 
-onMounted(() => loadDirectory())
+watch([importConfirm, cancelConfirm], async () => {
+  await nextTick()
+  focusSurface()?.focus()
+})
+
+watch(progress, value => {
+  if (value) importConfirm.value = null
+  if (value && !isActiveImport(value)) cancelConfirm.value = false
+})
+
+onMounted(async () => {
+  isolateBackground()
+  backgroundObserver = new MutationObserver(isolateBackground)
+  backgroundObserver.observe(document.body, { childList: true })
+  document.addEventListener('focusin', onFocusIn)
+  document.addEventListener('keydown', onKeydown, true)
+  await nextTick()
+  dialogRoot.value?.focus()
+  if (!progress.value && !importing.value && !unavailable.value) void loadDirectory()
+})
 onUnmounted(() => {
-  cancelImportConfirm()
-  stopPolling()
+  backgroundObserver?.disconnect()
+  for (const [element, inert] of background) element.inert = inert
+  document.removeEventListener('focusin', onFocusIn)
+  document.removeEventListener('keydown', onKeydown, true)
+  void nextTick(() => previousFocus?.focus())
 })
 </script>
 
 <template>
   <Teleport to="body">
-    <div class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-3" @click.self="importConfirm ? cancelImportConfirm() : emit('close')">
+    <div ref="dialogRoot" role="dialog" aria-modal="true" aria-label="导入媒体" tabindex="-1" class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-3 outline-none" @click.self="requestClose">
       <section
+        :inert="!!importConfirm || cancelConfirm || undefined"
         :class="[
           'w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col',
           isDark ? 'bg-gray-950 border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900',
@@ -189,9 +223,11 @@ onUnmounted(() => {
             <p class="text-xs text-gray-500 mt-0.5">选择服务器本机目录</p>
           </div>
           <button
-            @click="emit('close')"
-            class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-white transition-colors"
+            @click="requestClose"
+            :disabled="importing"
+            class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="关闭"
+            aria-label="关闭导入窗口"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path d="M6 18L18 6M6 6l12 12" />
@@ -200,6 +236,11 @@ onUnmounted(() => {
         </header>
 
         <div class="overflow-y-auto p-4 space-y-4">
+          <p v-if="importing" role="status" class="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-sm text-amber-600 dark:text-amber-400">
+            关闭或刷新网页不会终止服务器上的导入；如需停止，请使用安全终止按钮。
+          </p>
+          <p v-if="importing && !progress" class="text-sm text-gray-500">正在确认服务器任务，请稍候…</p>
+          <div v-if="!progress && !importing && !unavailable" class="space-y-4">
           <div class="flex flex-col md:flex-row gap-2">
             <input
               v-model="path"
@@ -326,6 +367,7 @@ onUnmounted(() => {
             </label>
           </div>
 
+          </div>
           <div
             v-if="progress"
             :class="['rounded-lg border p-3 space-y-3', isDark ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-gray-50']"
@@ -333,7 +375,8 @@ onUnmounted(() => {
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <p class="text-sm font-medium truncate">{{ stageLabel }}</p>
-                <p class="text-xs text-gray-500 truncate">{{ progress.message }}</p>
+                <p class="text-xs text-gray-500">{{ progress.message }}</p>
+                <p class="text-xs text-gray-500 break-all mt-1">{{ progress.stats.root_dir }}</p>
               </div>
               <span class="text-sm tabular-nums text-gray-500">{{ progress.percent }}%</span>
             </div>
@@ -355,7 +398,7 @@ onUnmounted(() => {
                 <p class="font-medium tabular-nums">{{ progressStats?.scanned_files || 0 }}</p>
               </div>
               <div>
-                <p class="text-gray-500">新增</p>
+                <p class="text-gray-500">已保存新增</p>
                 <p class="font-medium tabular-nums">{{ progressStats?.added_count || 0 }}</p>
               </div>
               <div>
@@ -363,11 +406,11 @@ onUnmounted(() => {
                 <p class="font-medium tabular-nums">{{ progressStats?.existing_count || 0 }}</p>
               </div>
               <div>
-                <p class="text-gray-500">首帧</p>
+                <p class="text-gray-500">已保存首帧</p>
                 <p class="font-medium tabular-nums">{{ progressStats?.thumbnail_count || 0 }}</p>
               </div>
               <div>
-                <p class="text-gray-500">预览</p>
+                <p class="text-gray-500">已保存预览</p>
                 <p class="font-medium tabular-nums">{{ progressStats?.preview_count || 0 }}</p>
               </div>
             </div>
@@ -376,20 +419,32 @@ onUnmounted(() => {
             </p>
           </div>
 
+          <div v-if="connectionError" role="alert" class="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-600">
+            {{ connectionError }}
+            <button class="ml-2 underline" @click="task.retry">立即重试</button>
+          </div>
+          <div v-if="actionError || progress?.error" role="alert" class="rounded-lg bg-red-600/15 p-3 text-sm text-red-400">{{ actionError || progress?.error }}</div>
           <div v-if="error" class="px-3 py-2 rounded-lg bg-red-600/15 text-red-400 text-sm">{{ error }}</div>
           <div v-if="result" :class="['px-3 py-2 rounded-lg text-sm', isDark ? 'bg-gray-900' : 'bg-gray-100']">
-            已扫描 {{ result.scanned_files }} 个文件，新增 {{ result.added_count }} 项，已有 {{ result.existing_count }} 项，首帧 {{ result.thumbnail_count }} 张，预览 {{ result.preview_count }} 张。
+            已扫描 {{ result.scanned_files }} 个文件，已保存新增 {{ result.added_count }} 项，已有 {{ result.existing_count }} 项，首帧 {{ result.thumbnail_count }} 张，预览 {{ result.preview_count }} 张。
           </div>
         </div>
 
         <footer :class="['px-4 py-3 border-t flex items-center justify-end gap-2', isDark ? 'border-gray-800' : 'border-gray-200']">
           <button
-            @click="emit('close')"
-            :class="['px-4 py-2 rounded-lg text-sm transition-colors', isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100']"
+            @click="requestClose"
+            :disabled="importing"
+            :class="['px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed', isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100']"
           >
             关闭
           </button>
+          <button v-if="isActiveImport(progress)" @click="cancelConfirm = true"
+            :disabled="cancelling || progress?.status === 'cancelling'"
+            class="px-4 py-2 rounded-lg text-sm bg-red-600 text-white hover:bg-red-500 disabled:opacity-50">
+            {{ progress?.status === 'cancelling' ? '正在安全终止…' : cancelling ? '正在请求终止…' : '安全终止导入' }}
+          </button>
           <button
+            v-if="!progress && !unavailable"
             @click="requestImportConfirmation"
             :disabled="!canImport"
             class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
@@ -404,7 +459,7 @@ onUnmounted(() => {
         class="absolute inset-0 z-20 flex items-center justify-center bg-black/85 p-4"
         @click.self="cancelImportConfirm"
       >
-        <section
+        <section data-confirm tabindex="-1"
           :class="[
             'w-full max-w-2xl overflow-hidden rounded-lg border-2 shadow-2xl',
             confirmIsNew
@@ -487,6 +542,17 @@ onUnmounted(() => {
               {{ confirmIsNew ? '确认全新导入' : '确认追加导入' }}
             </button>
           </footer>
+        </section>
+      </div>
+      <div v-if="cancelConfirm" class="absolute inset-0 z-30 flex items-center justify-center bg-black/80 p-4" @click.self="cancelConfirm = false">
+        <section data-confirm tabindex="-1" role="alertdialog" aria-label="安全终止确认"
+          :class="['w-full max-w-md rounded-xl border p-5 shadow-2xl outline-none', isDark ? 'bg-gray-950 border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900']">
+          <h3 class="font-semibold">安全终止导入</h3>
+          <p class="my-4 text-sm">停止后续处理，等待当前处理结束，并保留已完成部分。</p>
+          <div class="flex justify-end gap-3">
+            <button class="px-3 py-2 rounded-lg border border-gray-500" @click="cancelConfirm = false">继续导入</button>
+            <button class="px-3 py-2 rounded-lg bg-red-600 text-white" @click="confirmCancel">确认终止</button>
+          </div>
         </section>
       </div>
     </div>

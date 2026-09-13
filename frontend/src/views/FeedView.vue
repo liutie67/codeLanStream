@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
 import { getPreviewUrl, getStreamUrl, getThumbnailUrl } from '../api/client'
+import { useImportTask } from '../composables/useImportTask'
 import { useFeed } from '../composables/useFeed'
 import { useColumnLayout } from '../composables/useColumnLayout'
 import { useTheme } from '../composables/useTheme'
@@ -173,6 +174,7 @@ onUnmounted(() => {
   clearActivePrefetches()
   window.removeEventListener('scroll', onScroll)
 })
+watch(useImportTask().revision, () => void refresh())
 </script>
 
 <template>
@@ -344,7 +346,6 @@ onUnmounted(() => {
       v-if="showFolders"
       @close="showFolders = false"
       @play="activeItem = $event"
-      @imported="refresh"
     />
     <RoamingView
       v-if="showRoaming"

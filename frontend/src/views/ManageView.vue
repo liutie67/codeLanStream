@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useImportTask } from '../composables/useImportTask'
 import type { ExportTag, MediaItem } from '../api/types'
 import { fetchFeed, getThumbnailUrl, getStreamUrl, getPreviewUrl, purgeDeleted, exportMedia, batchUpdate, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useTheme } from '../composables/useTheme'
@@ -263,6 +264,7 @@ onUnmounted(() => {
   observer?.disconnect()
   window.removeEventListener('keydown', onPreviewKeydown)
 })
+watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCounts()]))
 </script>
 
 <template>

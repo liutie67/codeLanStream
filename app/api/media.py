@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -10,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse
-from app.services.import_jobs import get_import_job, start_import_job
+from app.services.import_jobs import (
+    ImportConflict, cancel_import_job, get_import_job, list_import_jobs, start_import_job,
+)
+from app.schemas.import_job import ImportJobOut
 from app.services.media import (
     ExportTag, FeedSort, batch_update, browse_folders, export_favorites, export_media_by_tags,
     get_feed, get_media,
@@ -218,6 +222,7 @@ class BatchRequest(BaseModel):
 
 
 class ImportRequest(BaseModel):
+    request_id: UUID | None = None
     path: str
     preview: bool = False
     media_type: MediaType | None = None
@@ -315,14 +320,30 @@ async def import_target(path: str, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.post("/manage/import")
+@router.post("/manage/import", response_model=ImportJobOut)
 async def import_media(body: ImportRequest):
-    return start_import_job(body.model_dump())
+    try:
+        return await start_import_job(body.model_dump(mode="json"))
+    except ImportConflict as exc:
+        raise HTTPException(409, {"message": "服务器已有导入任务", "job_id": exc.job_id})
 
 
-@router.get("/manage/import/{job_id}")
+@router.get("/manage/import", response_model=list[ImportJobOut])
+async def import_media_jobs(request_id: UUID | None = None):
+    return list_import_jobs(str(request_id) if request_id else None)
+
+
+@router.get("/manage/import/{job_id}", response_model=ImportJobOut)
 async def import_media_progress(job_id: str):
     job = get_import_job(job_id)
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    return job
+
+
+@router.post("/manage/import/{job_id}/cancel", response_model=ImportJobOut)
+async def cancel_media_import(job_id: str):
+    job = await cancel_import_job(job_id)
     if not job:
         raise HTTPException(404, "Import job not found")
     return job

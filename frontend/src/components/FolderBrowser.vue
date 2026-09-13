@@ -1,20 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import type { BrowseRoot, MediaItem, MediaType } from '../api/types'
 import { fetchBrowse } from '../api/client'
 import { useTheme } from '../composables/useTheme'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import MediaCard from './MediaCard.vue'
-import ImportMediaDialog from './ImportMediaDialog.vue'
-import type { ImportMediaResponse } from '../api/types'
+import { useImportTask } from '../composables/useImportTask'
 
 type ColumnMode = 'auto' | '1' | '2'
 
 const emit = defineEmits<{
   close: []
   play: [item: MediaItem]
-  imported: [result: ImportMediaResponse]
 }>()
 const { isDark } = useTheme()
 const { thumbMode, toggleMode } = useThumbnailMode()
@@ -26,7 +24,7 @@ const folders = ref<string[]>([])
 const items = ref<MediaItem[]>([])
 const loading = ref(false)
 const showRoots = ref(true)
-const showImport = ref(false)
+const importTask = useImportTask()
 const mediaType = ref<MediaType | null>(null)
 const colMode = ref<ColumnMode>('auto')
 
@@ -110,11 +108,10 @@ function onItemUpdated(updated: MediaItem) {
   if (idx !== -1) items.value[idx] = updated
 }
 
-async function onImported(_result: ImportMediaResponse) {
+watch(importTask.revision, async () => {
   if (showRoots.value) await loadRoots()
   else await loadFolder()
-  emit('imported', _result)
-}
+})
 </script>
 
 <template>
@@ -137,7 +134,7 @@ async function onImported(_result: ImportMediaResponse) {
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <button
-              @click="showImport = true"
+              @click="importTask.open"
               :class="[
                 'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
                 isDark ? 'border-gray-700 bg-gray-800 text-emerald-400 hover:text-emerald-300' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
@@ -292,11 +289,7 @@ async function onImported(_result: ImportMediaResponse) {
           <div v-else-if="!folders.length" class="py-12 text-center text-gray-500">此目录无媒体文件</div>
         </template>
       </main>
-      <ImportMediaDialog
-        v-if="showImport"
-        @close="showImport = false"
-        @imported="onImported"
-      />
+
     </div>
   </div>
 </template>

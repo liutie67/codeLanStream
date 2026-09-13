@@ -149,23 +149,42 @@ export async function fetchDirectories(path?: string): Promise<DirectoryListResp
   return res.json()
 }
 
-export async function importMediaFolder(body: ImportMediaRequest): Promise<ImportJobProgress> {
-  const res = await fetch(`${API_BASE}/manage/import`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    let message = `导入失败: ${res.status}`
-    try {
-      const data = await res.json()
-      message = data.detail || message
-    } catch {
-      message = await res.text() || message
-    }
-    throw new Error(message || `导入失败: ${res.status}`)
+export class ImportHttpError extends Error {
+  status: number
+  jobId?: string
+  constructor(message: string, status: number, jobId?: string) {
+    super(message)
+    this.status = status
+    this.jobId = jobId
   }
-  return res.json()
+}
+
+async function importRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch(`${API_BASE}/manage/import${path}`, { ...init, signal: controller.signal })
+    const data = await res.json()
+    if (!res.ok) {
+      const detail = data.detail
+      throw new ImportHttpError(typeof detail === 'string' ? detail : detail?.message || `请求失败: ${res.status}`, res.status, detail?.job_id)
+    }
+    return data
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export function importMediaFolder(body: ImportMediaRequest): Promise<ImportJobProgress> {
+  return importRequest('', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+}
+
+export function fetchImportJobs(requestId?: string): Promise<ImportJobProgress[]> {
+  return importRequest(requestId ? `?request_id=${encodeURIComponent(requestId)}` : '')
+}
+
+export function cancelImport(jobId: string): Promise<ImportJobProgress> {
+  return importRequest(`/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' })
 }
 
 export async function fetchImportTargetInfo(path: string): Promise<ImportTargetInfo> {
@@ -185,17 +204,6 @@ export async function fetchImportTargetInfo(path: string): Promise<ImportTargetI
   return res.json()
 }
 
-export async function fetchImportProgress(jobId: string): Promise<ImportJobProgress> {
-  const res = await fetch(`${API_BASE}/manage/import/${jobId}`)
-  if (!res.ok) {
-    let message = `进度读取失败: ${res.status}`
-    try {
-      const data = await res.json()
-      message = data.detail || message
-    } catch {
-      message = await res.text() || message
-    }
-    throw new Error(message)
-  }
-  return res.json()
+export function fetchImportProgress(jobId: string): Promise<ImportJobProgress> {
+  return importRequest(`/${encodeURIComponent(jobId)}`)
 }

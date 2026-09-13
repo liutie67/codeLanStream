@@ -56,6 +56,7 @@ export interface DirectoryListResponse {
 }
 
 export interface ImportMediaRequest {
+  request_id?: string
   path: string
   preview: boolean
   media_type?: MediaType | null
@@ -82,7 +83,7 @@ export interface ImportMediaResponse {
   preview_requested: boolean
 }
 
-export type ImportJobStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type ImportJobStatus = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 
 export type ImportJobStage =
   | 'queued'
@@ -91,11 +92,16 @@ export type ImportJobStage =
   | 'thumbnail'
   | 'preview'
   | 'committing'
+  | 'cancelling'
+  | 'cancelled'
+  | 'interrupted'
   | 'completed'
   | 'failed'
 
 export interface ImportJobProgress {
   id: string
+  request_id: string | null
+  options: ImportMediaRequest
   status: ImportJobStatus
   stage: ImportJobStage
   message: string

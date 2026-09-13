@@ -14,6 +14,7 @@ async def get_db():
 
 async def create_tables():
     from app.models.media import Base
+    from app.models.import_job import ImportJob  # noqa: F401: register task table
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
