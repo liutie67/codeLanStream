@@ -6,12 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.media import router as media_router
 from app.core.config import settings
 from app.core.database import create_tables
+from app.services.import_jobs import initialize_import_jobs, shutdown_import_jobs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
-    yield
+    await initialize_import_jobs()
+    try:
+        yield
+    finally:
+        await shutdown_import_jobs()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

@@ -1,17 +1,25 @@
 import os
+from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.media import MediaType
+from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse
+from app.services.import_jobs import (
+    ImportConflict, cancel_import_job, get_import_job, list_import_jobs, start_import_job,
+)
+from app.schemas.import_job import ImportJobOut
 from app.services.media import (
-    batch_update, browse_folders, export_favorites, get_feed, get_media,
+    ExportTag, FeedSort, batch_update, browse_folders, export_favorites, export_media_by_tags,
+    get_feed, get_media,
     get_mime_type, get_random_media, parse_range, purge_deleted,
-    toggle_deleted, toggle_favorite,
+    toggle_damaged, toggle_deleted, toggle_favorite,
 )
 
 router = APIRouter(prefix="/api/media", tags=["media"])
@@ -32,26 +40,69 @@ async def get_thumbnail(
     return _full_response(media.thumbnail_path, os.path.getsize(media.thumbnail_path), "image/jpeg")
 
 
+@router.get("/preview/{media_id}")
+async def get_preview(
+    media_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    media = await get_media(db, media_id)
+    if not media or not media.preview_path:
+        raise HTTPException(404, "Preview not found")
+    if not os.path.exists(media.preview_path):
+        raise HTTPException(404, "Preview file missing")
+    return _full_response(media.preview_path, os.path.getsize(media.preview_path), "image/png")
+
+
 @router.get("/feed", response_model=FeedResponse)
 async def feed(
     page: int = 1,
     page_size: int = 20,
     media_type: MediaType | None = None,
     folder: str | None = None,
+    is_favorited: bool | None = None,
+    is_deleted: bool | None = None,
+    is_damaged: bool | None = None,
+    folder_exact: bool = False,
+    folder_after: str | None = None,
+    sort: FeedSort = "created_desc",
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_feed(db, page, page_size, media_type, folder)
+    return await get_feed(
+        db,
+        page,
+        page_size,
+        media_type,
+        folder,
+        is_favorited,
+        is_deleted,
+        is_damaged,
+        folder_exact,
+        folder_after,
+        sort,
+    )
 
 
-@router.get("/random")
-async def random_media(
-    count: int = 50,
-    exclude_ids: str = "",
-    media_type: MediaType | None = None,
-    db: AsyncSession = Depends(get_db),
-):
-    ids = [x.strip() for x in exclude_ids.split(",") if x.strip()] or None
-    return await get_random_media(db, count, ids, media_type)
+class RandomRequest(BaseModel):
+    count: int = 50
+    exclude_ids: list[str] = []
+    media_type: MediaType | None = None
+    is_favorited: bool | None = None
+    is_deleted: bool | None = None
+    is_damaged: bool | None = None
+
+
+@router.post("/random")
+async def random_media(body: RandomRequest, db: AsyncSession = Depends(get_db)):
+    exclude = body.exclude_ids or None
+    return await get_random_media(
+        db,
+        body.count,
+        exclude,
+        body.media_type,
+        body.is_favorited,
+        body.is_deleted,
+        body.is_damaged,
+    )
 
 
 @router.get("/browse")
@@ -152,13 +203,39 @@ async def mark_deleted(media_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Media not found")
 
 
+@router.post("/{media_id}/damage")
+async def mark_damaged(media_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        return await toggle_damaged(db, media_id)
+    except ValueError:
+        raise HTTPException(404, "Media not found")
+
+
 class ExportRequest(BaseModel):
     target_dir: str
+    tags: list[ExportTag] = Field(default_factory=lambda: ["favorited"])
 
 
 class BatchRequest(BaseModel):
     ids: list[str]
-    action: str  # favorite, unfavorite, delete, undelete
+    action: str  # favorite, unfavorite, delete, undelete, damage, undamage
+
+
+class ImportRequest(BaseModel):
+    request_id: UUID | None = None
+    path: str
+    preview: bool = False
+    media_type: MediaType | None = None
+    recursive: bool = True
+    skip_hidden: bool = True
+    backfill_existing: bool = True
+    workers: int | None = Field(default=None, ge=1, le=16)
+
+
+class ImportTargetInfo(BaseModel):
+    path: str
+    is_existing_library_path: bool
+    existing_count: int
 
 
 @router.post("/manage/purge")
@@ -173,7 +250,100 @@ async def export_fav(body: ExportRequest, db: AsyncSession = Depends(get_db)):
     return {"exported_count": count}
 
 
+@router.post("/manage/export")
+async def export_media(body: ExportRequest, db: AsyncSession = Depends(get_db)):
+    count = await export_media_by_tags(db, body.target_dir, body.tags)
+    return {"exported_count": count}
+
+
 @router.post("/manage/batch")
 async def batch(body: BatchRequest, db: AsyncSession = Depends(get_db)):
     count = await batch_update(db, body.ids, body.action)
     return {"updated_count": count}
+
+
+@router.get("/manage/directories")
+async def list_directories(path: str | None = None):
+    target = Path(path).expanduser().resolve() if path else Path.home().resolve()
+    if not target.exists():
+        raise HTTPException(404, "Directory not found")
+    if not target.is_dir():
+        raise HTTPException(400, "Path is not a directory")
+
+    directories = []
+    try:
+        children = list(target.iterdir())
+    except PermissionError:
+        raise HTTPException(403, "Permission denied")
+
+    for child in children:
+        try:
+            if child.is_dir():
+                directories.append({
+                    "name": child.name,
+                    "path": str(child.resolve()),
+                })
+        except OSError:
+            continue
+
+    directories.sort(key=lambda item: item["name"].lower())
+    parent = str(target.parent) if target.parent != target else None
+    return {
+        "path": str(target),
+        "parent": parent,
+        "directories": directories,
+    }
+
+
+@router.get("/manage/import-target", response_model=ImportTargetInfo)
+async def import_target(path: str, db: AsyncSession = Depends(get_db)):
+    if not path.strip():
+        raise HTTPException(400, "Path is required")
+
+    target = Path(path).expanduser().resolve()
+    target_path = str(target)
+    target_prefix = target_path + os.sep
+    result = await db.execute(
+        select(func.count(Media.id)).where(
+            or_(
+                Media.root_dir == target_path,
+                Media.folder == target_path,
+                Media.folder.startswith(target_prefix),
+            )
+        )
+    )
+    existing_count = result.scalar_one()
+    return ImportTargetInfo(
+        path=target_path,
+        is_existing_library_path=existing_count > 0,
+        existing_count=existing_count,
+    )
+
+
+@router.post("/manage/import", response_model=ImportJobOut)
+async def import_media(body: ImportRequest):
+    try:
+        return await start_import_job(body.model_dump(mode="json"))
+    except ImportConflict as exc:
+        raise HTTPException(409, {"message": "服务器已有导入任务", "job_id": exc.job_id})
+
+
+@router.get("/manage/import", response_model=list[ImportJobOut])
+async def import_media_jobs(request_id: UUID | None = None):
+    return list_import_jobs(str(request_id) if request_id else None)
+
+
+@router.get("/manage/import/{job_id}", response_model=ImportJobOut)
+async def import_media_progress(job_id: str):
+    job = get_import_job(job_id)
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    return job
+
+
+@router.post("/manage/import/{job_id}/cancel", response_model=ImportJobOut)
+async def cancel_media_import(job_id: str):
+    job = await cancel_import_job(job_id)
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    return job

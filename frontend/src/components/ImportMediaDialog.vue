@@ -1,0 +1,560 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { DirectoryListResponse, ImportMediaRequest, MediaType } from '../api/types'
+import { fetchDirectories, fetchImportTargetInfo } from '../api/client'
+import { useTheme } from '../composables/useTheme'
+import { useImportTask } from '../composables/useImportTask'
+import { isActiveImport } from '../composables/importTaskController'
+
+const task = useImportTask()
+const { job: progress, locked: importing, connectionError, actionError, cancelling, unavailable } = task
+const result = computed(() => progress.value && !isActiveImport(progress.value) ? progress.value.stats : null)
+const dialogRoot = ref<HTMLElement | null>(null)
+const cancelConfirm = ref(false)
+const previousFocus = document.activeElement as HTMLElement | null
+const background = new Map<HTMLElement, boolean>()
+let backgroundObserver: MutationObserver | undefined
+function isolateBackground() {
+  for (const element of document.body.children) {
+    if (element instanceof HTMLElement && element !== dialogRoot.value && !background.has(element)) {
+      background.set(element, element.inert)
+      element.inert = true
+    }
+  }
+}
+function onFocusIn(event: FocusEvent) {
+  const surface = focusSurface()
+  if (surface && !surface.contains(event.target as Node)) surface.focus()
+}
+const { isDark } = useTheme()
+
+const path = ref('')
+const directoryList = ref<DirectoryListResponse | null>(null)
+const loadingDirs = ref(false)
+const checkingTarget = ref(false)
+const error = ref('')
+
+const preview = ref(false)
+const mediaType = ref<MediaType | 'all'>('all')
+const recursive = ref(true)
+const skipHidden = ref(true)
+const backfillExisting = ref(true)
+const workers = ref(4)
+
+const typeOptions: { value: MediaType | 'all'; label: string }[] = [
+  { value: 'all', label: '全部' },
+  { value: 'video', label: '视频' },
+  { value: 'image', label: '图片' },
+]
+
+type ImportConfirmState = {
+  level: 'existing' | 'new'
+  path: string
+  existingCount: number
+}
+
+const importConfirm = ref<ImportConfirmState | null>(null)
+const canImport = computed(() => path.value.trim().length > 0 && !importing.value && !checkingTarget.value)
+const confirmIsNew = computed(() => importConfirm.value?.level === 'new')
+const progressStats = computed(() => progress.value?.stats || result.value)
+const importOptionsSummary = computed(() => [
+  recursive.value ? '递归扫描子目录' : '仅扫描当前目录',
+  skipHidden.value ? '跳过隐藏文件' : '包含隐藏文件',
+  backfillExisting.value ? '补齐已有媒体' : '不补齐已有媒体',
+  preview.value ? `生成预览，并发 ${workers.value}` : '仅生成首帧',
+  mediaType.value === 'all' ? '导入全部类型' : mediaType.value === 'video' ? '仅导入视频' : '仅导入图片',
+])
+const stageLabel = computed(() => {
+  switch (progress.value?.stage) {
+    case 'queued': return '等待开始'
+    case 'preparing': return '准备导入'
+    case 'scanning': return '扫描文件'
+    case 'thumbnail': return '处理首帧'
+    case 'preview': return '生成预览'
+    case 'committing': return '写入数据库'
+    case 'completed': return '导入完成'
+    case 'failed': return '导入失败'
+    case 'cancelling': return '正在安全终止'
+    case 'cancelled': return '已安全终止'
+    case 'interrupted': return '导入已中断'
+    default: return importing.value ? '正在确认任务' : '未开始'
+  }
+})
+
+function buildImportRequest(targetPath: string): ImportMediaRequest {
+  return {
+    path: targetPath,
+    preview: preview.value,
+    media_type: mediaType.value === 'all' ? null : mediaType.value,
+    recursive: recursive.value,
+    skip_hidden: skipHidden.value,
+    backfill_existing: backfillExisting.value,
+    workers: preview.value ? workers.value : null,
+  }
+}
+
+async function loadDirectory(target?: string) {
+  if (importing.value) return
+  loadingDirs.value = true
+  error.value = ''
+  try {
+    const res = await fetchDirectories(target)
+    directoryList.value = res
+    path.value = res.path
+  } catch (e: any) {
+    error.value = e.message || '目录读取失败'
+  } finally {
+    loadingDirs.value = false
+  }
+}
+
+async function requestImportConfirmation() {
+  if (!canImport.value) return
+  checkingTarget.value = true
+  error.value = ''
+  try {
+    const target = await fetchImportTargetInfo(path.value.trim())
+    importConfirm.value = {
+      level: target.is_existing_library_path ? 'existing' : 'new',
+      path: target.path,
+      existingCount: target.existing_count,
+    }
+  } catch (e: any) {
+    error.value = e.message || '导入目标检查失败'
+  } finally {
+    checkingTarget.value = false
+  }
+}
+
+function cancelImportConfirm() {
+  importConfirm.value = null
+}
+
+async function confirmImport() {
+  const targetPath = importConfirm.value?.path
+  if (!targetPath) return
+  importConfirm.value = null
+  await submit(targetPath)
+}
+
+async function submit(targetPath: string) {
+  await task.start(buildImportRequest(targetPath))
+}
+
+function requestClose() {
+  if (importing.value) return
+  if (importConfirm.value) cancelImportConfirm()
+  else task.close()
+}
+
+async function confirmCancel() {
+  cancelConfirm.value = false
+  await task.cancel()
+}
+
+function focusSurface() {
+  return dialogRoot.value?.querySelector<HTMLElement>('[data-confirm]') || dialogRoot.value
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    if (cancelConfirm.value) cancelConfirm.value = false
+    else requestClose()
+  }
+  if (event.key === 'Tab') {
+    const surface = focusSurface()
+    const elements = [...(surface?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]') || [])]
+      .filter(el => el.getClientRects().length > 0)
+    const first = elements[0]
+    const last = elements[elements.length - 1]
+    if (!first) { event.preventDefault(); surface?.focus(); return }
+    if (event.shiftKey && (document.activeElement === first || !elements.includes(document.activeElement as HTMLElement))) {
+      event.preventDefault(); last?.focus()
+    } else if (!event.shiftKey && (document.activeElement === last || !elements.includes(document.activeElement as HTMLElement))) {
+      event.preventDefault(); first.focus()
+    }
+  }
+}
+
+watch([importConfirm, cancelConfirm], async () => {
+  await nextTick()
+  focusSurface()?.focus()
+})
+
+watch(progress, value => {
+  if (value) importConfirm.value = null
+  if (value && !isActiveImport(value)) cancelConfirm.value = false
+})
+
+onMounted(async () => {
+  isolateBackground()
+  backgroundObserver = new MutationObserver(isolateBackground)
+  backgroundObserver.observe(document.body, { childList: true })
+  document.addEventListener('focusin', onFocusIn)
+  document.addEventListener('keydown', onKeydown, true)
+  await nextTick()
+  dialogRoot.value?.focus()
+  if (!progress.value && !importing.value && !unavailable.value) void loadDirectory()
+})
+onUnmounted(() => {
+  backgroundObserver?.disconnect()
+  for (const [element, inert] of background) element.inert = inert
+  document.removeEventListener('focusin', onFocusIn)
+  document.removeEventListener('keydown', onKeydown, true)
+  void nextTick(() => previousFocus?.focus())
+})
+</script>
+
+<template>
+  <Teleport to="body">
+    <div ref="dialogRoot" role="dialog" aria-modal="true" aria-label="导入媒体" tabindex="-1" class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-3 outline-none" @click.self="requestClose">
+      <section
+        :inert="!!importConfirm || cancelConfirm || undefined"
+        :class="[
+          'w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col',
+          isDark ? 'bg-gray-950 border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900',
+        ]"
+      >
+        <header :class="['px-4 py-3 border-b flex items-center justify-between gap-3', isDark ? 'border-gray-800' : 'border-gray-200']">
+          <div>
+            <h2 class="text-sm font-semibold">导入媒体</h2>
+            <p class="text-xs text-gray-500 mt-0.5">选择服务器本机目录</p>
+          </div>
+          <button
+            @click="requestClose"
+            :disabled="importing"
+            class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="关闭"
+            aria-label="关闭导入窗口"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="overflow-y-auto p-4 space-y-4">
+          <p v-if="importing" role="status" class="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-sm text-amber-600 dark:text-amber-400">
+            关闭或刷新网页不会终止服务器上的导入；如需停止，请使用安全终止按钮。
+          </p>
+          <p v-if="importing && !progress" class="text-sm text-gray-500">正在确认服务器任务，请稍候…</p>
+          <div v-if="!progress && !importing && !unavailable" class="space-y-4">
+          <div class="flex flex-col md:flex-row gap-2">
+            <input
+              v-model="path"
+              :disabled="importing"
+              :class="[
+                'flex-1 min-w-0 px-3 py-2 rounded-lg border text-sm font-mono disabled:opacity-60',
+                isDark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900',
+              ]"
+              placeholder="/path/to/media"
+            />
+            <button
+              @click="loadDirectory(path)"
+              :disabled="loadingDirs || importing || !path.trim()"
+              :class="[
+                'h-10 px-3 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50',
+                isDark ? 'border-gray-700 bg-gray-800 hover:bg-gray-700' : 'border-gray-300 bg-gray-100 hover:bg-gray-200',
+              ]"
+            >
+              打开
+            </button>
+          </div>
+
+          <div :class="['rounded-lg border overflow-hidden', isDark ? 'border-gray-800' : 'border-gray-200']">
+            <div :class="['px-3 py-2 border-b flex items-center justify-between gap-2', isDark ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-gray-50']">
+              <span class="text-xs font-mono truncate">{{ directoryList?.path || '...' }}</span>
+              <button
+                v-if="directoryList?.parent"
+                @click="loadDirectory(directoryList.parent)"
+                class="shrink-0 text-xs text-blue-400 hover:text-blue-300"
+              >
+                上级
+              </button>
+            </div>
+            <div class="max-h-60 overflow-y-auto">
+              <button
+                v-for="dir in directoryList?.directories || []"
+                :key="dir.path"
+                @click="loadDirectory(dir.path)"
+                :class="[
+                  'w-full px-3 py-2 flex items-center gap-2 text-left text-sm border-b last:border-b-0 transition-colors',
+                  isDark ? 'border-gray-800 hover:bg-gray-900' : 'border-gray-100 hover:bg-gray-50',
+                ]"
+              >
+                <svg class="w-4 h-4 shrink-0 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
+                </svg>
+                <span class="truncate">{{ dir.name }}</span>
+              </button>
+              <div v-if="loadingDirs" class="px-3 py-6 text-center text-sm text-gray-500">读取中...</div>
+              <div v-else-if="directoryList && directoryList.directories.length === 0" class="px-3 py-6 text-center text-sm text-gray-500">无子目录</div>
+            </div>
+          </div>
+
+          <div class="grid gap-3 md:grid-cols-2">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">视频处理</label>
+              <div :class="['inline-flex rounded-full p-0.5', isDark ? 'bg-gray-800' : 'bg-gray-200']">
+                <button
+                  @click="preview = false"
+                  :disabled="importing"
+                  :class="[
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-60',
+                    !preview ? 'bg-blue-600 text-white' : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
+                  ]"
+                >
+                  首帧
+                </button>
+                <button
+                  @click="preview = true"
+                  :disabled="importing"
+                  :class="[
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-60',
+                    preview ? 'bg-emerald-600 text-white' : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
+                  ]"
+                >
+                  预览
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">导入类型</label>
+              <div :class="['inline-flex rounded-full p-0.5', isDark ? 'bg-gray-800' : 'bg-gray-200']">
+                <button
+                  v-for="option in typeOptions"
+                  :key="option.value"
+                  @click="mediaType = option.value"
+                  :disabled="importing"
+                  :class="[
+                    'px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-60',
+                    mediaType === option.value ? 'bg-blue-600 text-white' : isDark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700',
+                  ]"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+
+            <label class="flex items-center gap-2 text-sm">
+              <input v-model="recursive" :disabled="importing" type="checkbox" class="w-4 h-4 accent-blue-500 disabled:opacity-60" />
+              <span>递归子目录</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input v-model="skipHidden" :disabled="importing" type="checkbox" class="w-4 h-4 accent-blue-500 disabled:opacity-60" />
+              <span>跳过隐藏文件</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input v-model="backfillExisting" :disabled="importing" type="checkbox" class="w-4 h-4 accent-blue-500 disabled:opacity-60" />
+              <span>补齐已有媒体</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <span class="text-gray-500">预览并发</span>
+              <input
+                v-model.number="workers"
+                type="number"
+                min="1"
+                max="16"
+                :disabled="!preview || importing"
+                :class="[
+                  'w-20 px-2 py-1 rounded border text-sm disabled:opacity-50',
+                  isDark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900',
+                ]"
+              />
+            </label>
+          </div>
+
+          </div>
+          <div
+            v-if="progress"
+            :class="['rounded-lg border p-3 space-y-3', isDark ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-gray-50']"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium truncate">{{ stageLabel }}</p>
+                <p class="text-xs text-gray-500">{{ progress.message }}</p>
+                <p class="text-xs text-gray-500 break-all mt-1">{{ progress.stats.root_dir }}</p>
+              </div>
+              <span class="text-sm tabular-nums text-gray-500">{{ progress.percent }}%</span>
+            </div>
+            <div :class="['h-2 rounded-full overflow-hidden', isDark ? 'bg-gray-800' : 'bg-gray-200']">
+              <div
+                class="h-full rounded-full bg-blue-600 transition-all duration-300"
+                :style="{ width: `${progress.percent}%` }"
+              />
+            </div>
+            <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
+              <div>
+                <p class="text-gray-500">阶段</p>
+                <p class="font-medium tabular-nums">
+                  {{ progress.total ? `${progress.current}/${progress.total}` : '-' }}
+                </p>
+              </div>
+              <div>
+                <p class="text-gray-500">已扫描</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.scanned_files || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">已保存新增</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.added_count || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">已有</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.existing_count || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">已保存首帧</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.thumbnail_count || 0 }}</p>
+              </div>
+              <div>
+                <p class="text-gray-500">已保存预览</p>
+                <p class="font-medium tabular-nums">{{ progressStats?.preview_count || 0 }}</p>
+              </div>
+            </div>
+            <p v-if="progress.current_file" class="text-xs text-gray-500 font-mono truncate">
+              {{ progress.current_file }}
+            </p>
+          </div>
+
+          <div v-if="connectionError" role="alert" class="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-600">
+            {{ connectionError }}
+            <button class="ml-2 underline" @click="task.retry">立即重试</button>
+          </div>
+          <div v-if="actionError || progress?.error" role="alert" class="rounded-lg bg-red-600/15 p-3 text-sm text-red-400">{{ actionError || progress?.error }}</div>
+          <div v-if="error" class="px-3 py-2 rounded-lg bg-red-600/15 text-red-400 text-sm">{{ error }}</div>
+          <div v-if="result" :class="['px-3 py-2 rounded-lg text-sm', isDark ? 'bg-gray-900' : 'bg-gray-100']">
+            已扫描 {{ result.scanned_files }} 个文件，已保存新增 {{ result.added_count }} 项，已有 {{ result.existing_count }} 项，首帧 {{ result.thumbnail_count }} 张，预览 {{ result.preview_count }} 张。
+          </div>
+        </div>
+
+        <footer :class="['px-4 py-3 border-t flex items-center justify-end gap-2', isDark ? 'border-gray-800' : 'border-gray-200']">
+          <button
+            @click="requestClose"
+            :disabled="importing"
+            :class="['px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed', isDark ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100']"
+          >
+            关闭
+          </button>
+          <button v-if="isActiveImport(progress)" @click="cancelConfirm = true"
+            :disabled="cancelling || progress?.status === 'cancelling'"
+            class="px-4 py-2 rounded-lg text-sm bg-red-600 text-white hover:bg-red-500 disabled:opacity-50">
+            {{ progress?.status === 'cancelling' ? '正在安全终止…' : cancelling ? '正在请求终止…' : '安全终止导入' }}
+          </button>
+          <button
+            v-if="!progress && !unavailable"
+            @click="requestImportConfirmation"
+            :disabled="!canImport"
+            class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
+          >
+            {{ importing ? '导入中...' : checkingTarget ? '检查中...' : '导入' }}
+          </button>
+        </footer>
+      </section>
+
+      <div
+        v-if="importConfirm"
+        class="absolute inset-0 z-20 flex items-center justify-center bg-black/85 p-4"
+        @click.self="cancelImportConfirm"
+      >
+        <section data-confirm tabindex="-1"
+          :class="[
+            'w-full max-w-2xl overflow-hidden rounded-lg border-2 shadow-2xl',
+            confirmIsNew
+              ? 'border-red-500 bg-red-950 text-white shadow-red-950/60'
+              : 'border-amber-400 bg-gray-950 text-white shadow-amber-950/40',
+          ]"
+        >
+          <div
+            :class="[
+              'px-5 py-4 border-b flex items-start gap-4',
+              confirmIsNew ? 'border-red-400/40 bg-red-600/25' : 'border-amber-300/30 bg-amber-500/15',
+            ]"
+          >
+            <svg
+              :class="['mt-0.5 shrink-0', confirmIsNew ? 'h-16 w-16 text-red-200' : 'h-12 w-12 text-amber-200']"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+              <path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+            </svg>
+            <div class="min-w-0">
+              <p :class="['font-black leading-tight', confirmIsNew ? 'text-2xl' : 'text-xl']">
+                {{ confirmIsNew ? '全新目录导入确认' : '已入库目录追加确认' }}
+              </p>
+              <p :class="['mt-2 text-sm leading-6', confirmIsNew ? 'text-red-50' : 'text-amber-50/90']">
+                <template v-if="confirmIsNew">
+                  这个目录当前没有任何入库记录。确认后会把它作为新的媒体来源扫描，可能批量新增大量媒体和处理任务。
+                </template>
+                <template v-else>
+                  这个目录下已有 {{ importConfirm.existingCount }} 个入库媒体。确认后会按当前选项扫描新增媒体并补齐已有记录。
+                </template>
+              </p>
+            </div>
+          </div>
+
+          <div class="space-y-4 px-5 py-4">
+            <div :class="['rounded-lg border p-3', confirmIsNew ? 'border-red-300/40 bg-black/25' : 'border-white/10 bg-white/5']">
+              <p class="mb-1 text-xs font-semibold text-white/55">目标路径</p>
+              <p class="break-all font-mono text-sm text-white">{{ importConfirm.path }}</p>
+            </div>
+
+            <div class="grid gap-2 sm:grid-cols-2">
+              <div
+                v-for="item in importOptionsSummary"
+                :key="item"
+                :class="[
+                  'rounded border px-3 py-2 text-xs font-medium',
+                  confirmIsNew ? 'border-red-300/35 bg-red-500/10 text-red-50' : 'border-white/10 bg-white/5 text-white/75',
+                ]"
+              >
+                {{ item }}
+              </div>
+            </div>
+
+            <p :class="['rounded-lg px-3 py-2 text-sm font-semibold', confirmIsNew ? 'bg-red-500 text-white' : 'bg-amber-400 text-gray-950']">
+              {{ confirmIsNew ? '请确认这不是误点：这会创建新的入库来源。' : '请再次确认：这会修改现有媒体库记录。' }}
+            </p>
+          </div>
+
+          <footer class="flex flex-col-reverse gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:justify-end">
+            <button
+              @click="cancelImportConfirm"
+              class="px-4 py-2 rounded-lg border border-white/15 text-sm font-medium text-white/80 hover:bg-white/10 transition-colors"
+            >
+              取消，不导入
+            </button>
+            <button
+              @click="confirmImport"
+              :class="[
+                'px-5 py-2 rounded-lg text-sm font-black text-white transition-colors',
+                confirmIsNew ? 'bg-red-600 hover:bg-red-500' : 'bg-amber-500 hover:bg-amber-400 !text-gray-950',
+              ]"
+            >
+              {{ confirmIsNew ? '确认全新导入' : '确认追加导入' }}
+            </button>
+          </footer>
+        </section>
+      </div>
+      <div v-if="cancelConfirm" class="absolute inset-0 z-30 flex items-center justify-center bg-black/80 p-4" @click.self="cancelConfirm = false">
+        <section data-confirm tabindex="-1" role="alertdialog" aria-label="安全终止确认"
+          :class="['w-full max-w-md rounded-xl border p-5 shadow-2xl outline-none', isDark ? 'bg-gray-950 border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900']">
+          <h3 class="font-semibold">安全终止导入</h3>
+          <p class="my-4 text-sm">停止后续处理，等待当前处理结束，并保留已完成部分。</p>
+          <div class="flex justify-end gap-3">
+            <button class="px-3 py-2 rounded-lg border border-gray-500" @click="cancelConfirm = false">继续导入</button>
+            <button class="px-3 py-2 rounded-lg bg-red-600 text-white" @click="confirmCancel">确认终止</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </Teleport>
+</template>

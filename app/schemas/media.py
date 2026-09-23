@@ -16,8 +16,10 @@ class MediaOut(BaseModel):
     folder: str | None
     root_dir: str | None
     thumbnail_path: str | None
+    preview_path: str | None
     is_favorited: bool
     is_deleted: bool
+    is_damaged: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

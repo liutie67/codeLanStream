@@ -1,52 +1,180 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { MediaItem } from '../api/types'
+import { getPreviewUrl, getStreamUrl, getThumbnailUrl } from '../api/client'
+import { useImportTask } from '../composables/useImportTask'
 import { useFeed } from '../composables/useFeed'
+import { useColumnLayout } from '../composables/useColumnLayout'
 import { useTheme } from '../composables/useTheme'
+import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from '../components/TypeFilter.vue'
 import MediaCard from '../components/MediaCard.vue'
 import VideoPlayer from '../components/VideoPlayer.vue'
 import FolderBrowser from '../components/FolderBrowser.vue'
 import RoamingView from '../components/RoamingView.vue'
+import TurboView from '../components/TurboView.vue'
+import { createPreloadImage, releaseImageElement } from '../utils/mediaResource'
 
-const { items, loading, hasMore, total, mediaType, loadMore, setMediaType } = useFeed()
+type ColumnMode = 'auto' | '1' | '2'
+
+const LOAD_AHEAD_PX = 2800
+const PREFETCH_CONCURRENCY = 3
+const PREFETCH_LOOKBACK = 8
+const PREFETCH_MAX_ITEMS = 48
+const PREFETCH_URL_CACHE_LIMIT = 180
+
+const { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
+const { thumbMode, toggleMode } = useThumbnailMode()
 const activeItem = ref<MediaItem | null>(null)
 const showFolders = ref(false)
 const showRoaming = ref(false)
-const colMode = ref<'auto' | '1' | '2'>('auto')
+const showTurbo = ref(false)
+const colMode = ref<ColumnMode>('auto')
 
-function getColClass() {
-  if (colMode.value === '1') return 'masonry masonry-1'
-  if (colMode.value === '2') return 'masonry masonry-2'
-  return 'masonry'
-}
+const colCount = computed(() => {
+  if (colMode.value === '1') return 1
+  if (colMode.value === '2') return 2
+  return 4
+})
+
+const { columns, updateItem } = useColumnLayout(items, colCount)
+const columnRef = ref<HTMLElement>()
+const prefetchedUrls = new Set<string>()
+const prefetchQueue: string[] = []
+const activePrefetchImages = new Set<HTMLImageElement>()
+let prefetchActive = 0
+let nextPrefetchIndex = 0
+let stopped = false
+
+const thumbModeTitle = computed(() => (
+  thumbMode.value === 'grid' ? '当前: 预览，点击切换到首帧' : '当前: 首帧，点击切换到预览'
+))
+
+const colModeTitle = computed(() => {
+  if (colMode.value === 'auto') return '当前: 自动列数，点击切换到单列'
+  if (colMode.value === '1') return '当前: 单列，点击切换到双列'
+  return '当前: 双列，点击切换到自动'
+})
 
 function cycleColMode() {
-  const modes: ('auto' | '1' | '2')[] = ['auto', '1', '2']
+  const modes: ColumnMode[] = ['auto', '1', '2']
   const idx = modes.indexOf(colMode.value)
   colMode.value = modes[(idx + 1) % modes.length]
-}
-
-const colIcon = () => {
-  const map = { auto: '⊞', '1': '▭', '2': '⊞' }
-  return map[colMode.value]
 }
 
 function onItemUpdated(updated: MediaItem) {
   const idx = items.value.findIndex(i => i.id === updated.id)
   if (idx !== -1) items.value[idx] = updated
+  updateItem(updated)
 }
 
-function onScroll() {
-  if (loading.value || !hasMore.value) return
-  const bottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY
-  if (bottom < 600) loadMore()
+async function onScroll() {
+  if (loading.value || !hasMore.value || !columnRef.value) return
+  const colEls = columnRef.value.children
+  let minBottom = Infinity
+  for (const col of colEls) {
+    const bottom = (col as HTMLElement).getBoundingClientRect().bottom
+    if (bottom < minBottom) minBottom = bottom
+  }
+  if (minBottom < window.innerHeight + LOAD_AHEAD_PX) {
+    await loadMore()
+    requestAnimationFrame(onScroll)
+  }
 }
 
-onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
-onUnmounted(() => window.removeEventListener('scroll', onScroll))
+function getPreloadUrl(item: MediaItem): string | null {
+  if (item.media_type === 'image') return getStreamUrl(item.id)
+  if (thumbMode.value === 'grid' && item.preview_path) return getPreviewUrl(item.id)
+  if (item.thumbnail_path) return getThumbnailUrl(item.id)
+  return null
+}
+
+function rememberPrefetchedUrl(url: string) {
+  prefetchedUrls.add(url)
+  while (prefetchedUrls.size > PREFETCH_URL_CACHE_LIMIT) {
+    const oldest = prefetchedUrls.values().next().value
+    if (!oldest) break
+    prefetchedUrls.delete(oldest)
+  }
+}
+
+function enqueuePreload(url: string) {
+  if (prefetchedUrls.has(url) || prefetchQueue.includes(url)) return
+  rememberPrefetchedUrl(url)
+  prefetchQueue.push(url)
+  pumpPreloadQueue()
+}
+
+function clearActivePrefetches() {
+  for (const image of activePrefetchImages) releaseImageElement(image)
+  activePrefetchImages.clear()
+  prefetchActive = 0
+}
+
+function pumpPreloadQueue() {
+  if (stopped) return
+  while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length) {
+    const url = prefetchQueue.shift()
+    if (!url) return
+    prefetchActive++
+    const img = createPreloadImage()
+    activePrefetchImages.add(img)
+    img.onload = img.onerror = () => {
+      activePrefetchImages.delete(img)
+      prefetchActive = Math.max(0, prefetchActive - 1)
+      pumpPreloadQueue()
+    }
+    img.src = url
+  }
+}
+
+function prefetchAhead(reset = false) {
+  if (reset) {
+    prefetchQueue.length = 0
+    clearActivePrefetches()
+    nextPrefetchIndex = 0
+  }
+
+  const start = Math.max(0, nextPrefetchIndex - PREFETCH_LOOKBACK)
+  const end = Math.min(items.value.length, nextPrefetchIndex + PREFETCH_MAX_ITEMS)
+  for (const item of items.value.slice(start, end)) {
+    const url = getPreloadUrl(item)
+    if (url) enqueuePreload(url)
+  }
+  nextPrefetchIndex = Math.max(nextPrefetchIndex, end)
+}
+
+watch(
+  () => items.value.length,
+  (len, oldLen) => {
+    if (len < (oldLen ?? 0)) {
+      prefetchedUrls.clear()
+      prefetchAhead(true)
+      return
+    }
+    prefetchAhead()
+  },
+  { immediate: true },
+)
+
+watch(thumbMode, () => {
+  prefetchedUrls.clear()
+  prefetchAhead(true)
+})
+
+onMounted(() => {
+  window.addEventListener('scroll', onScroll, { passive: true })
+  onScroll()
+})
+onUnmounted(() => {
+  stopped = true
+  prefetchQueue.length = 0
+  clearActivePrefetches()
+  window.removeEventListener('scroll', onScroll)
+})
+watch(useImportTask().revision, () => void refresh())
 </script>
 
 <template>
@@ -83,6 +211,16 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
             </svg>
           </button>
           <button
+            v-if="!showTurbo"
+            @click="showTurbo = true"
+            class="hidden md:flex w-7 h-7 items-center justify-center rounded-full bg-gray-800 text-yellow-400 hover:bg-gray-700 transition-colors shrink-0"
+            title="极速模式"
+          >
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+          </button>
+          <button
             @click="toggleTheme"
             :class="['w-7 h-7 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-yellow-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
             :title="isDark ? '浅色模式' : '深色模式'"
@@ -95,11 +233,86 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
             </svg>
           </button>
           <button
-            @click="cycleColMode"
-            :class="['w-7 h-7 flex items-center justify-center rounded-full text-sm transition-colors shrink-0', isDark ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
-            :title="colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列'"
+            @click="toggleMode"
+            :class="[
+              'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+              thumbMode === 'grid'
+                ? 'border-emerald-500 bg-emerald-600 text-white'
+                : isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+            ]"
+            :title="thumbModeTitle"
+            aria-label="切换预览模式"
           >
-            {{ colIcon() }}
+            <svg
+              v-if="thumbMode === 'grid'"
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="4" width="6" height="6" rx="1" />
+              <rect x="14" y="4" width="6" height="6" rx="1" />
+              <rect x="4" y="14" width="6" height="6" rx="1" />
+              <rect x="14" y="14" width="6" height="6" rx="1" />
+            </svg>
+            <svg
+              v-else
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none" />
+            </svg>
+            <span class="hidden md:inline">{{ thumbMode === 'grid' ? '预览' : '首帧' }}</span>
+          </button>
+          <button
+            @click="cycleColMode"
+            :class="[
+              'h-8 w-8 md:w-auto md:px-2.5 flex items-center justify-center gap-1 rounded-full border text-xs font-medium shadow-sm transition-colors shrink-0',
+              isDark ? 'border-gray-700 bg-gray-800 text-gray-300 hover:text-white' : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900',
+            ]"
+            :title="colModeTitle"
+            aria-label="切换列布局"
+          >
+            <svg
+              v-if="colMode === 'auto'"
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="4" width="7" height="7" rx="1" />
+              <rect x="13" y="4" width="7" height="5" rx="1" />
+              <rect x="4" y="13" width="7" height="7" rx="1" />
+              <rect x="13" y="11" width="7" height="9" rx="1" />
+            </svg>
+            <svg
+              v-else-if="colMode === '1'"
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="7" y="4" width="10" height="16" rx="2" />
+            </svg>
+            <svg
+              v-else
+              class="w-4 h-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <rect x="4" y="4" width="7" height="16" rx="2" />
+              <rect x="13" y="4" width="7" height="16" rx="2" />
+            </svg>
+            <span class="hidden md:inline">{{ colMode === 'auto' ? '自动' : colMode === '1' ? '单列' : '双列' }}</span>
           </button>
           <TypeFilter :current="mediaType" @change="setMediaType" />
         </div>
@@ -107,14 +320,20 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
     </header>
 
     <main class="px-4 lg:px-6 py-4">
-      <div :class="getColClass()">
-        <MediaCard
-          v-for="item in items"
-          :key="item.id"
-          :item="item"
-          @click="activeItem = $event"
-          @updated="onItemUpdated"
-        />
+      <div
+        ref="columnRef"
+        class="flex items-start gap-2"
+        :style="colMode === '1' ? 'max-width: 720px; margin: 0 auto' : ''"
+      >
+        <div v-for="(col, ci) in columns" :key="ci" class="flex-1 flex flex-col gap-2">
+          <MediaCard
+            v-for="item in col"
+            :key="item.id"
+            :item="item"
+            @click="activeItem = $event"
+            @updated="onItemUpdated"
+          />
+        </div>
       </div>
 
       <div v-if="loading" class="py-8 text-center text-gray-400">
@@ -131,6 +350,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
     <RoamingView
       v-if="showRoaming"
       @close="showRoaming = false"
+    />
+    <TurboView
+      v-if="showTurbo"
+      @close="showTurbo = false"
     />
     <VideoPlayer
       v-if="activeItem"

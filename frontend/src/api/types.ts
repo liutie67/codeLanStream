@@ -1,4 +1,5 @@
 export type MediaType = 'video' | 'image'
+export type ExportTag = 'favorited' | 'deleted' | 'damaged'
 
 export interface MediaItem {
   id: string
@@ -11,8 +12,10 @@ export interface MediaItem {
   folder: string | null
   root_dir: string | null
   thumbnail_path: string | null
+  preview_path: string | null
   is_favorited: boolean
   is_deleted: boolean
+  is_damaged: boolean
   created_at: string
 }
 
@@ -39,4 +42,75 @@ export interface BrowseResponse {
   roots: BrowseRoot[]
   folders: string[]
   items: MediaItem[]
+}
+
+export interface DirectoryEntry {
+  name: string
+  path: string
+}
+
+export interface DirectoryListResponse {
+  path: string
+  parent: string | null
+  directories: DirectoryEntry[]
+}
+
+export interface ImportMediaRequest {
+  request_id?: string
+  path: string
+  preview: boolean
+  media_type?: MediaType | null
+  recursive: boolean
+  skip_hidden: boolean
+  backfill_existing: boolean
+  workers?: number | null
+}
+
+export interface ImportTargetInfo {
+  path: string
+  is_existing_library_path: boolean
+  existing_count: number
+}
+
+export interface ImportMediaResponse {
+  root_dir: string
+  scanned_files: number
+  added_count: number
+  existing_count: number
+  skipped_count: number
+  thumbnail_count: number
+  preview_count: number
+  preview_requested: boolean
+}
+
+export type ImportJobStatus = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+
+export type ImportJobStage =
+  | 'queued'
+  | 'preparing'
+  | 'scanning'
+  | 'thumbnail'
+  | 'preview'
+  | 'committing'
+  | 'cancelling'
+  | 'cancelled'
+  | 'interrupted'
+  | 'completed'
+  | 'failed'
+
+export interface ImportJobProgress {
+  id: string
+  request_id: string | null
+  options: ImportMediaRequest
+  status: ImportJobStatus
+  stage: ImportJobStage
+  message: string
+  percent: number
+  current: number
+  total: number
+  current_file: string | null
+  stats: ImportMediaResponse
+  error: string | null
+  created_at: string
+  updated_at: string
 }
