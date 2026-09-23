@@ -89,6 +89,7 @@ class RandomRequest(BaseModel):
     is_favorited: bool | None = None
     is_deleted: bool | None = None
     is_damaged: bool | None = None
+    folder: str | None = None
 
 
 @router.post("/random")
@@ -102,6 +103,7 @@ async def random_media(body: RandomRequest, db: AsyncSession = Depends(get_db)):
         body.is_favorited,
         body.is_deleted,
         body.is_damaged,
+        body.folder,
     )
 
 

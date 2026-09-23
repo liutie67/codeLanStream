@@ -280,6 +280,7 @@ async def get_random_media(
     is_favorited: bool | None = None,
     is_deleted: bool | None = None,
     is_damaged: bool | None = None,
+    folder: str | None = None,
 ) -> dict:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -287,6 +288,10 @@ async def get_random_media(
     if media_type:
         query = query.where(Media.media_type == media_type)
         count_query = count_query.where(Media.media_type == media_type)
+
+    if folder is not None:
+        query = query.where(Media.folder == folder)
+        count_query = count_query.where(Media.folder == folder)
 
     if exclude_ids:
         query = query.where(Media.id.notin_(exclude_ids))

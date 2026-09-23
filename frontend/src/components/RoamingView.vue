@@ -15,6 +15,7 @@ import {
 } from '../utils/mediaResource'
 
 const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ folder?: string }>()
 
 const { thumbMode } = useThumbnailMode()
 type MarkAction = 'favorite' | 'delete' | 'damage'
@@ -48,11 +49,15 @@ const userVolume = ref(0)
 const videoPaused = ref(true)
 const lastAction = ref<{ itemId: string; action: MarkAction } | null>(null)
 const pendingKeyAction = ref<MarkAction | null>(null)
+const pendingKeyCode = ref<string | null>(null)
 const playbackRate = ref(1)
+const fillViewport = ref(false)
+const rotation = ref(0)
 const showHelp = ref(false)
 const isDesktop = !('ontouchstart' in window)
 
 const current = computed(() => items.value[currentIndex.value])
+watch(() => current.value?.id, () => { rotation.value = 0 }, { flush: 'sync' })
 const prevItem = computed(() => currentIndex.value > 0 ? items.value[currentIndex.value - 1] : null)
 const nextItem = computed(() => currentIndex.value < items.value.length - 1 ? items.value[currentIndex.value + 1] : null)
 const preloadWindowItems = computed(() => {
@@ -67,9 +72,26 @@ const browseModes: Array<{ mode: BrowseMode; label: string; title: string }> = [
 ]
 
 const hasTransition = computed(() => phase.value !== 'dragging')
+const rotatedMediaStyle = computed(() => {
+  if (!rotation.value) return {}
+  if (rotation.value === 180) return { transform: 'rotate(180deg)' }
+  // The unrotated box uses the stage's height as its maximum width (and vice versa).
+  // After a quarter turn its visible bounds therefore stay inside the stage.
+  return {
+    width: fillViewport.value ? '100cqh' : 'auto',
+    height: fillViewport.value ? '100cqw' : 'auto',
+    maxWidth: '100cqh',
+    maxHeight: '100cqw',
+    flexShrink: '0',
+    transform: `rotate(${rotation.value}deg)`,
+  }
+})
 const currentBrowseMode = computed(() => (
   browseModes.find(item => item.mode === browseMode.value) || browseModes[0]
 ))
+const browseModeTitle = computed(() => props.folder && browseMode.value === 'folder'
+  ? '当前: 当前文件夹按文件名连续浏览，点击切换到按大小倒序'
+  : currentBrowseMode.value.title)
 const currentBackground = computed(() => {
   if (!current.value) return 'black'
   if (current.value.is_damaged) return 'rgba(168,85,247,1)'
@@ -137,14 +159,16 @@ const shortcutGroups = [
     items: [
       { keys: 'S / ↓', label: '下一个媒体' },
       { keys: 'W / ↑', label: '上一个媒体' },
+      { keys: 'A / .', label: '放大 / 还原当前媒体（适应可视区域）' },
+      { keys: 'Z', label: '当前媒体顺时针旋转 90°' },
       { keys: 'Esc', label: '退出漫游' },
     ],
   },
   {
     title: '标记',
     items: [
-      { keys: 'F', label: '收藏，松开后跳到下一个' },
-      { keys: 'D', label: '删除，松开后跳到下一个' },
+      { keys: 'F / Enter', label: '收藏，松开后跳到下一个' },
+      { keys: 'D / Backspace', label: '删除，松开后跳到下一个' },
       { keys: 'G', label: '损坏，松开后跳到下一个' },
     ],
   },
@@ -249,11 +273,21 @@ function toggleByAction(action: MarkAction, itemId: string): Promise<MediaItem> 
   return toggleDamaged(itemId)
 }
 
-function actionFromKey(key: string): MarkAction | null {
-  const normalized = key.toLowerCase()
-  if (normalized === 'f') return 'favorite'
-  if (normalized === 'd') return 'delete'
-  if (normalized === 'g') return 'damage'
+function shortcutCode(e: KeyboardEvent): string {
+  // Physical codes remain stable with Shift and Chinese input methods.
+  if (e.code && e.code !== 'Unidentified') return e.code
+  const key = e.key.toLowerCase()
+  if (/^[a-z]$/.test(key)) return `Key${key.toUpperCase()}`
+  if (/^[0-9]$/.test(key)) return `Digit${key}`
+  if (key === '.' || key === '。' || key === '．') return 'Period'
+  if (key === ' ') return 'Space'
+  return e.key
+}
+
+function actionFromCode(code: string): MarkAction | null {
+  if (code === 'KeyF' || code === 'Enter' || code === 'NumpadEnter') return 'favorite'
+  if (code === 'KeyD' || code === 'Backspace') return 'delete'
+  if (code === 'KeyG') return 'damage'
   return null
 }
 
@@ -391,17 +425,33 @@ async function loadMore() {
         hideMarked.value ? false : null,
         hideMarked.value ? false : null,
         hideMarked.value ? false : null,
+        props.folder,
       )
       nextItems = res.items
       if (res.items.length < LOAD_BATCH_SIZE) hasMore.value = false
     } else if (browseMode.value === 'folder') {
-      nextItems = await loadFolderModeItems()
+      if (props.folder) {
+        const res = await fetchFeed({
+          ...feedFilterParams(),
+          folder: props.folder,
+          folder_exact: true,
+          page: orderedPage.value,
+          page_size: LOAD_BATCH_SIZE,
+          sort: 'file_path_asc',
+        })
+        nextItems = res.items
+        hasMore.value = res.has_next
+        orderedPage.value++
+      } else {
+        nextItems = await loadFolderModeItems()
+      }
     } else {
       const params: Parameters<typeof fetchFeed>[0] = {
         page: orderedPage.value,
         page_size: LOAD_BATCH_SIZE,
         ...(mediaType.value && { media_type: mediaType.value }),
         ...(hideMarked.value && { is_favorited: false, is_deleted: false, is_damaged: false }),
+        ...(props.folder && { folder: props.folder, folder_exact: true }),
         sort: 'size_desc',
       }
       const res = await fetchFeed(params)
@@ -511,6 +561,7 @@ function resetRoamingItems() {
   folderStart.value = browseMode.value === 'folder' ? (folderAnchor.value || current.value?.folder || null) : null
   lastAction.value = null
   pendingKeyAction.value = null
+  pendingKeyCode.value = null
   videoPaused.value = true
 }
 
@@ -603,43 +654,55 @@ function handleClick(e: MouseEvent) {
 
 // Keyboard
 function onKeydown(e: KeyboardEvent) {
+  const target = e.target
+  if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return
+  if (e.ctrlKey || e.metaKey || e.altKey) return
   if (showHelp.value) {
     if (e.key === 'Escape') showHelp.value = false
     return
   }
 
-  const action = actionFromKey(e.key)
+  const code = shortcutCode(e)
+  const action = actionFromCode(code)
   if (action) {
     e.preventDefault()
     if (!e.repeat && !pendingKeyAction.value && !isLocked.value && current.value) {
       pendingKeyAction.value = action
+      pendingKeyCode.value = code
     }
-  } else if (e.key === ' ') {
+  } else if (code === 'KeyA' || code === 'Period' || code === 'NumpadDecimal') {
+    e.preventDefault()
+    if (!e.repeat) fillViewport.value = !fillViewport.value
+  } else if (code === 'KeyZ') {
+    e.preventDefault()
+    if (!e.repeat && current.value) rotation.value = (rotation.value + 90) % 360
+  } else if (code === 'Space') {
     e.preventDefault()
     if (videoEl.value) videoEl.value.paused ? videoEl.value.play() : videoEl.value.pause()
   } else if (e.key === 'Escape') emit('close')
-  else if (e.key === 'ArrowDown') handleSwipe('up')
-  else if (e.key === 'ArrowUp') handleSwipe('down')
-  else if (e.key.toLowerCase() === 's') handleSwipe('up')
-  else if (e.key.toLowerCase() === 'w') handleSwipe('down')
-  else if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'q') seekVideo(-30)
-  else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'e') seekVideo(30)
-  else if (e.key === '1') setPlaybackRate(1)
-  else if (e.key === '2') setPlaybackRate(2)
-  else if (e.key === '3') setPlaybackRate(3)
-  else if (e.key === 'm' || e.key.toLowerCase() === 'c' || e.key === '0') toggleMute()
+  else if (code === 'ArrowDown' || code === 'KeyS') { e.preventDefault(); handleSwipe('up') }
+  else if (code === 'ArrowUp' || code === 'KeyW') { e.preventDefault(); handleSwipe('down') }
+  else if (code === 'ArrowLeft' || code === 'KeyQ') { e.preventDefault(); seekVideo(-30) }
+  else if (code === 'ArrowRight' || code === 'KeyE') { e.preventDefault(); seekVideo(30) }
+  else if (code === 'Digit1' || code === 'Numpad1') setPlaybackRate(1)
+  else if (code === 'Digit2' || code === 'Numpad2') setPlaybackRate(2)
+  else if (code === 'Digit3' || code === 'Numpad3') setPlaybackRate(3)
+  else if (code === 'KeyM' || code === 'KeyC' || code === 'Digit0' || code === 'Numpad0') toggleMute()
 }
 
 function onKeyup(e: KeyboardEvent) {
-  const action = actionFromKey(e.key)
-  if (!action || pendingKeyAction.value !== action) return
+  const code = shortcutCode(e)
+  if (pendingKeyCode.value !== code || !pendingKeyAction.value) return
   e.preventDefault()
+  const action = pendingKeyAction.value
   pendingKeyAction.value = null
+  pendingKeyCode.value = null
   markCurrent(action)
 }
 
 function clearPendingKeyAction() {
   pendingKeyAction.value = null
+  pendingKeyCode.value = null
 }
 
 onMounted(() => {
@@ -704,7 +767,7 @@ onUnmounted(() => {
         <button
           @click="cycleBrowseMode"
           class="h-8 px-2.5 flex items-center gap-1.5 rounded-full bg-white/10 text-xs text-white/70 hover:text-white transition-colors"
-          :title="currentBrowseMode.title"
+          :title="browseModeTitle"
         >
           <svg
             v-if="browseMode === 'random'"
@@ -790,7 +853,7 @@ onUnmounted(() => {
         <img
           v-if="prevDisplayUrl"
           :src="prevDisplayUrl"
-          class="max-w-full max-h-full object-contain rounded-lg"
+          :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
         />
         <div
           v-else
@@ -805,6 +868,7 @@ onUnmounted(() => {
         v-if="current"
         :key="current.id"
         class="absolute inset-0 flex items-center justify-center p-4 pt-16 pb-8"
+        style="container-type: size"
         :style="{
           transform: `translate(${offsetX}px, ${offsetY}px)`,
           transition: hasTransition ? 'transform 200ms ease-out' : 'none',
@@ -813,7 +877,8 @@ onUnmounted(() => {
         <img
           v-if="current.media_type === 'image'"
           :src="getStreamUrl(current.id)"
-          class="max-w-full max-h-full object-contain rounded-lg"
+          :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
+          :style="rotatedMediaStyle"
         />
         <video
           v-else
@@ -824,7 +889,8 @@ onUnmounted(() => {
           muted
           loop
           playsinline
-          class="max-w-full max-h-full rounded-lg"
+          :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full rounded-lg'"
+          :style="rotatedMediaStyle"
           @click.stop="videoEl && (videoEl.paused ? videoEl.play() : videoEl.pause())"
           @pause="videoPaused = true"
           @play="videoPaused = false"
@@ -832,12 +898,13 @@ onUnmounted(() => {
         />
         <div
           v-if="current.media_type === 'video' && thumbMode === 'grid' && videoPaused && currentVideoPosterUrl"
-          class="absolute inset-0 flex items-center justify-center cursor-pointer"
+          class="absolute inset-0 flex items-center justify-center cursor-pointer p-4 pt-16 pb-8"
           @click.stop="videoEl && videoEl.play()"
         >
           <img
             :src="currentVideoPosterUrl"
-            class="max-w-full max-h-full object-contain rounded-lg"
+            :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
+            :style="rotatedMediaStyle"
           />
           <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
@@ -868,7 +935,7 @@ onUnmounted(() => {
         <img
           v-if="nextDisplayUrl"
           :src="nextDisplayUrl"
-          class="max-w-full max-h-full object-contain rounded-lg"
+          :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
         />
         <div
           v-else

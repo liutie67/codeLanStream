@@ -7,6 +7,8 @@ import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
 import MediaCard from './MediaCard.vue'
 import { useImportTask } from '../composables/useImportTask'
+import RoamingView from './RoamingView.vue'
+import TurboView from './TurboView.vue'
 
 type ColumnMode = 'auto' | '1' | '2'
 
@@ -27,6 +29,13 @@ const showRoots = ref(true)
 const importTask = useImportTask()
 const mediaType = ref<MediaType | null>(null)
 const colMode = ref<ColumnMode>('auto')
+const showRoaming = ref(false)
+const showTurbo = ref(false)
+const selectedFolder = computed(() => {
+  if (showRoots.value) return ''
+  const subdir = currentPath.value.slice(1).join('/')
+  return subdir ? `${currentRoot.value.replace(/\/$/, '')}/${subdir}` : currentRoot.value
+})
 
 const thumbModeTitle = computed(() => (
   thumbMode.value === 'grid' ? '当前: 预览，点击切换到首帧' : '当前: 首帧，点击切换到预览'
@@ -150,6 +159,27 @@ watch(importTask.revision, async () => {
             </button>
             <template v-if="!showRoots">
               <span class="text-xs text-gray-500 tabular-nums">{{ items.length }}</span>
+              <button
+                @click="showRoaming = true"
+                :class="['w-8 h-8 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-blue-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
+                title="漫游当前文件夹（不含子文件夹）"
+                aria-label="漫游当前文件夹"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+              </button>
+              <button
+                v-if="!showTurbo"
+                @click="showTurbo = true"
+                class="flex w-8 h-8 items-center justify-center rounded-full bg-gray-800 text-yellow-400 hover:bg-gray-700 transition-colors shrink-0"
+                title="极速浏览当前文件夹（不含子文件夹）"
+                aria-label="极速浏览当前文件夹"
+              >
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                </svg>
+              </button>
               <button
                 @click="toggleMode"
                 :class="[
@@ -292,4 +322,6 @@ watch(importTask.revision, async () => {
 
     </div>
   </div>
+  <RoamingView v-if="showRoaming" :folder="selectedFolder" @close="showRoaming = false" />
+  <TurboView v-if="showTurbo" :folder="selectedFolder" @close="showTurbo = false" />
 </template>

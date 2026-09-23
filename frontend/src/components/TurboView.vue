@@ -9,6 +9,7 @@ import VideoProgress from './VideoProgress.vue'
 import { releaseMediaElement } from '../utils/mediaResource'
 
 const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ folder?: string }>()
 
 const { thumbMode } = useThumbnailMode()
 
@@ -36,7 +37,7 @@ async function loadMore() {
   if (loading.value || !hasMore.value) return
   loading.value = true
   try {
-    const res = await fetchRandom(50, [...loadedIds.value], mediaType.value, false, false)
+    const res = await fetchRandom(50, [...loadedIds.value], mediaType.value, false, false, null, props.folder)
     for (const item of res.items) loadedIds.value.add(item.id)
     items.value.push(...res.items)
     if (res.items.length < 50) hasMore.value = false

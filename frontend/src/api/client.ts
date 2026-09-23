@@ -47,6 +47,7 @@ export async function fetchRandom(
   isFavorited?: boolean | null,
   isDeleted?: boolean | null,
   isDamaged?: boolean | null,
+  folder?: string,
 ): Promise<RandomResponse> {
   const res = await fetch(`${API_BASE}/random`, {
     method: 'POST',
@@ -58,6 +59,7 @@ export async function fetchRandom(
       ...(isFavorited !== undefined && isFavorited !== null && { is_favorited: isFavorited }),
       ...(isDeleted !== undefined && isDeleted !== null && { is_deleted: isDeleted }),
       ...(isDamaged !== undefined && isDamaged !== null && { is_damaged: isDamaged }),
+      ...(folder !== undefined && { folder }),
     }),
   })
   return res.json()
