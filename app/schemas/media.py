@@ -1,8 +1,12 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
 from app.models.media import MediaType
+
+Availability = Literal["available", "missing", "unavailable"]
+AvailabilityFilter = Literal["available", "missing", "unavailable", "all"]
 
 
 class MediaOut(BaseModel):
@@ -20,6 +24,8 @@ class MediaOut(BaseModel):
     is_favorited: bool
     is_deleted: bool
     is_damaged: bool
+    availability: Availability
+    availability_checked_at: datetime | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -24,7 +24,7 @@ const PREFETCH_LOOKBACK = 8
 const PREFETCH_MAX_ITEMS = 48
 const PREFETCH_URL_CACHE_LIMIT = 180
 
-const { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType } = useFeed()
+const { items, loading, error, hasMore, total, mediaType, loadMore, refresh, setMediaType } = useFeed()
 const { isDark, toggleTheme } = useTheme()
 const { thumbMode, toggleMode } = useThumbnailMode()
 const activeItem = ref<MediaItem | null>(null)
@@ -70,8 +70,13 @@ function onItemUpdated(updated: MediaItem) {
   updateItem(updated)
 }
 
+function removeUnavailable(id: string) {
+  items.value = items.value.filter(item => item.id !== id)
+  if (activeItem.value?.id === id) activeItem.value = null
+}
+
 async function onScroll() {
-  if (loading.value || !hasMore.value || !columnRef.value) return
+  if (loading.value || error.value || !hasMore.value || !columnRef.value) return
   const colEls = columnRef.value.children
   let minBottom = Infinity
   for (const col of colEls) {
@@ -332,10 +337,14 @@ watch(useImportTask().revision, () => void refresh())
             :item="item"
             @click="activeItem = $event"
             @updated="onItemUpdated"
+            @unavailable="removeUnavailable"
           />
         </div>
       </div>
 
+      <div v-if="error" class="py-8 text-center text-gray-400" role="alert">
+        {{ error }} <button @click="loadMore" class="ml-3 text-blue-400">重试</button>
+      </div>
       <div v-if="loading" class="py-8 text-center text-gray-400">
         <span class="inline-block animate-spin mr-2">&#9696;</span> 加载中...
       </div>
@@ -359,6 +368,7 @@ watch(useImportTask().revision, () => void refresh())
       v-if="activeItem"
       :item="activeItem"
       @close="activeItem = null"
+      @unavailable="removeUnavailable"
     />
   </div>
 </template>

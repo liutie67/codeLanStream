@@ -8,9 +8,31 @@ import type {
   MediaItem,
   RandomResponse,
   ExportTag,
+  AvailabilityFilter,
+  AvailabilityJob,
 } from './types'
 
 const API_BASE = '/api/media'
+
+export async function mediaRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (init.signal?.aborted) abort()
+  init.signal?.addEventListener('abort', abort, { once: true })
+  const timer = setTimeout(abort, 10_000)
+  try {
+    const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal })
+    const data = await response.json()
+    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : data.detail?.message || `请求失败: ${response.status}`)
+    return data as T
+  } catch (error) {
+    if (controller.signal.aborted && !init.signal?.aborted) throw new Error('读取超时，请检查硬盘或网络后重试')
+    throw error
+  } finally {
+    clearTimeout(timer)
+    init.signal?.removeEventListener('abort', abort)
+  }
+}
 
 export async function fetchFeed(params: {
   page?: number
@@ -23,7 +45,8 @@ export async function fetchFeed(params: {
   is_favorited?: boolean
   is_deleted?: boolean
   is_damaged?: boolean
-}): Promise<FeedResponse> {
+  availability?: AvailabilityFilter
+}, signal?: AbortSignal): Promise<FeedResponse> {
   const search = new URLSearchParams()
   if (params.page) search.set('page', String(params.page))
   if (params.page_size) search.set('page_size', String(params.page_size))
@@ -35,9 +58,9 @@ export async function fetchFeed(params: {
   if (params.is_favorited !== undefined) search.set('is_favorited', String(params.is_favorited))
   if (params.is_deleted !== undefined) search.set('is_deleted', String(params.is_deleted))
   if (params.is_damaged !== undefined) search.set('is_damaged', String(params.is_damaged))
+  if (params.availability) search.set('availability', params.availability)
 
-  const res = await fetch(`${API_BASE}/feed?${search}`)
-  return res.json()
+  return mediaRequest(`/feed?${search}`, { signal })
 }
 
 export async function fetchRandom(
@@ -49,7 +72,7 @@ export async function fetchRandom(
   isDamaged?: boolean | null,
   folder?: string,
 ): Promise<RandomResponse> {
-  const res = await fetch(`${API_BASE}/random`, {
+  return mediaRequest('/random', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -62,16 +85,17 @@ export async function fetchRandom(
       ...(folder !== undefined && { folder }),
     }),
   })
-  return res.json()
 }
 
-export async function fetchBrowse(rootDir?: string, subdir?: string, mediaType?: string | null): Promise<BrowseResponse> {
+export async function fetchBrowse(rootDir?: string, subdir?: string, mediaType?: string | null, signal?: AbortSignal, page: number = 1, afterPath?: string): Promise<BrowseResponse> {
   const search = new URLSearchParams()
   if (rootDir) search.set('root_dir', rootDir)
   if (subdir) search.set('subdir', subdir)
   if (mediaType) search.set('media_type', mediaType)
-  const res = await fetch(`${API_BASE}/browse?${search}`)
-  return res.json()
+  search.set('page', String(page))
+  search.set('page_size', '60')
+  if (afterPath) search.set('after_path', afterPath)
+  return mediaRequest(`/browse?${search}`, { signal })
 }
 
 export function getStreamUrl(mediaId: string): string {
@@ -134,22 +158,19 @@ export async function batchUpdate(ids: string[], action: string): Promise<{ upda
   return res.json()
 }
 
-export async function fetchDirectories(path?: string): Promise<DirectoryListResponse> {
+export async function fetchDirectories(path?: string, signal?: AbortSignal): Promise<DirectoryListResponse> {
   const search = new URLSearchParams()
   if (path) search.set('path', path)
-  const res = await fetch(`${API_BASE}/manage/directories?${search}`)
-  if (!res.ok) {
-    let message = `目录读取失败: ${res.status}`
-    try {
-      const data = await res.json()
-      message = data.detail || message
-    } catch {
-      message = await res.text() || message
-    }
-    throw new Error(message)
-  }
-  return res.json()
+  return mediaRequest(`/manage/directories?${search}`, { signal })
 }
+
+const postJson = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+export const recheckMedia = (ids: string[]) => mediaRequest<MediaItem[]>('/manage/availability/probe', postJson({ ids }))
+export const removeMediaRecords = (ids: string[]) => mediaRequest<{ removed_count: number }>('/manage/availability/remove-records', postJson({ ids }))
+export const startAvailabilityCheck = () => mediaRequest<AvailabilityJob>('/manage/availability/check', { method: 'POST' })
+export const fetchAvailabilityChecks = (signal?: AbortSignal) => mediaRequest<AvailabilityJob[]>('/manage/availability/check', { signal })
+export const fetchAvailabilityCheck = (id: string, signal?: AbortSignal) => mediaRequest<AvailabilityJob>(`/manage/availability/check/${encodeURIComponent(id)}`, { signal })
+export const cancelAvailabilityCheck = (id: string) => mediaRequest<AvailabilityJob>(`/manage/availability/check/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
 
 export class ImportHttpError extends Error {
   status: number

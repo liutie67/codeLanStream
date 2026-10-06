@@ -1,28 +1,25 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchRandom, getStreamUrl, getThumbnailUrl, getPreviewUrl, toggleFavorite, batchUpdate } from '../api/client'
+import { fetchRandom, toggleFavorite, batchUpdate } from '../api/client'
 import { useColumnLayout } from '../composables/useColumnLayout'
-import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
-import VideoProgress from './VideoProgress.vue'
-import { releaseMediaElement } from '../utils/mediaResource'
+import MediaImage from './MediaImage.vue'
+import VideoPlayer from './VideoPlayer.vue'
 
 const emit = defineEmits<{ close: [] }>()
 const props = defineProps<{ folder?: string }>()
 
-const { thumbMode } = useThumbnailMode()
 
 const items = ref<MediaItem[]>([])
 const loadedIds = ref<Set<string>>(new Set())
 const mediaType = ref<MediaType | null>(null)
 const loading = ref(false)
+const error = ref('')
 const hasMore = ref(true)
 const favoriteIds = ref<Set<string>>(new Set())
 const scrolledPastIds = ref<Set<string>>(new Set())
 const previewItem = ref<MediaItem | null>(null)
-const previewVideoEl = ref<HTMLVideoElement | null>(null)
-const previewPaused = ref(true)
 const colMode = ref(5)
 const scrollRef = ref<HTMLElement>()
 const cardRefs = new Map<string, HTMLElement>()
@@ -36,12 +33,15 @@ let scrollObserver: IntersectionObserver | null = null
 async function loadMore() {
   if (loading.value || !hasMore.value) return
   loading.value = true
+  error.value = ''
   try {
     const res = await fetchRandom(50, [...loadedIds.value], mediaType.value, false, false, null, props.folder)
     for (const item of res.items) loadedIds.value.add(item.id)
     items.value.push(...res.items)
     if (res.items.length < 50) hasMore.value = false
     pruneAbove()
+  } catch (failure) {
+    error.value = failure instanceof Error ? failure.message : '媒体读取失败'
   } finally {
     loading.value = false
   }
@@ -91,13 +91,15 @@ async function toggleFav(item: MediaItem) {
   if (idx !== -1) items.value[idx] = { ...items.value[idx], is_favorited: !items.value[idx].is_favorited }
 }
 
-function closePreview() {
-  releaseMediaElement(previewVideoEl.value)
-  previewItem.value = null
+function removeUnavailable(id: string) {
+  items.value = items.value.filter(item => item.id !== id)
+  favoriteIds.value.delete(id)
+  scrolledPastIds.value.delete(id)
+  if (previewItem.value?.id === id) closePreview()
 }
 
-function onPreviewKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') closePreview()
+function closePreview() {
+    previewItem.value = null
 }
 
 function setupSeenObserver() {
@@ -129,6 +131,7 @@ function observeCard(el: HTMLElement, id: string) {
 }
 
 function onScroll() {
+  if (error.value) return
   if (!scrollRef.value || loading.value || !hasMore.value || !columnRef.value) return
   const scrollBottom = scrollRef.value.getBoundingClientRect().bottom
   const colEls = columnRef.value.children
@@ -185,14 +188,11 @@ onMounted(() => {
   setupSeenObserver()
   setupScrollObserver()
   loadMore()
-  window.addEventListener('keydown', onPreviewKeydown)
 })
 
 onUnmounted(() => {
-  releaseMediaElement(previewVideoEl.value)
   seenObserver?.disconnect()
   scrollObserver?.disconnect()
-  window.removeEventListener('keydown', onPreviewKeydown)
 })
 </script>
 
@@ -243,103 +243,25 @@ onUnmounted(() => {
             :class="cardBorderClass(item)"
             @click="onCardClick($event, item)"
           >
-            <img
-              v-if="item.media_type === 'image'"
-              :src="getStreamUrl(item.id)"
-              class="w-full block"
-              loading="lazy"
-            />
-            <div v-else class="relative">
-              <template v-if="thumbMode === 'grid'">
-                <img
-                  v-if="item.preview_path"
-                  :src="getPreviewUrl(item.id)"
-                  class="w-full block"
-                  loading="lazy"
-                />
-                <div
-                  v-else
-                  class="w-full bg-black flex items-center justify-center"
-                  style="aspect-ratio: 16/9"
-                >
-                  <span class="text-white text-[10px]">还未生成</span>
-                </div>
-              </template>
-              <template v-else>
-                <img
-                  v-if="item.thumbnail_path"
-                  :src="getThumbnailUrl(item.id)"
-                  class="w-full block"
-                  loading="lazy"
-                />
-                <div
-                  v-else
-                  class="w-full bg-black flex items-center justify-center"
-                  style="aspect-ratio: 16/9"
-                >
-                  <span class="text-white text-[10px]">还未生成</span>
-                </div>
-              </template>
-              <div class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
-                <svg class="w-8 h-8 text-white/70" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+            <div class="relative">
+              <MediaImage :item="item" @unavailable="removeUnavailable" />
+              <div v-if="item.media_type === 'video'" class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
+                <svg class="w-8 h-8 text-white/70" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
               </div>
             </div>
           </div>
         </div>
       </div>
 
+      <p v-if="error" class="py-4 text-center text-amber-400" role="alert">{{ error }} <button @click="loadMore" class="ml-3 text-blue-400">重试</button></p>
       <div v-if="loading" class="py-8 text-center text-white/50">
         <span class="inline-block animate-spin mr-2">&#9696;</span> 加载中...
       </div>
       <p v-else-if="!hasMore && items.length" class="py-8 text-center text-white/30 text-sm">已加载全部</p>
     </div>
 
-    <!-- Preview modal -->
     <Teleport to="body">
-      <div
-        v-if="previewItem"
-        class="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4"
-        @click="closePreview"
-      >
-        <button
-          @click="closePreview"
-          class="fixed top-4 right-4 text-white/70 hover:text-white text-3xl z-10"
-        >
-          &times;
-        </button>
-        <template v-if="previewItem.media_type === 'video'">
-          <div class="relative max-w-full max-h-full">
-            <video
-              ref="previewVideoEl"
-              :src="getStreamUrl(previewItem.id)"
-              autoplay
-              class="max-w-full max-h-full rounded-lg"
-              @click.stop="previewVideoEl && (previewVideoEl.paused ? previewVideoEl.play() : previewVideoEl.pause())"
-              @pause="previewPaused = true"
-              @play="previewPaused = false"
-            />
-            <div
-              v-if="previewPaused"
-              class="absolute inset-0 flex items-center justify-center pointer-events-none"
-            >
-              <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
-                <svg class="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-              </div>
-            </div>
-          </div>
-          <div class="fixed bottom-0 inset-x-0 z-10 px-4 pb-4">
-            <VideoProgress :video="previewVideoEl" />
-          </div>
-        </template>
-        <img
-          v-else
-          :src="getStreamUrl(previewItem.id)"
-          class="max-w-full max-h-full object-contain rounded-lg"
-          @click.stop
-        />
-      </div>
+      <VideoPlayer v-if="previewItem" :item="previewItem" @close="closePreview" @unavailable="removeUnavailable" />
     </Teleport>
   </div>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import type { BrowseRoot, MediaItem, MediaType } from '../api/types'
 import { fetchBrowse } from '../api/client'
 import { useTheme } from '../composables/useTheme'
@@ -9,6 +9,7 @@ import MediaCard from './MediaCard.vue'
 import { useImportTask } from '../composables/useImportTask'
 import RoamingView from './RoamingView.vue'
 import TurboView from './TurboView.vue'
+import { createLatestRequest } from '../utils/latestRequest'
 
 type ColumnMode = 'auto' | '1' | '2'
 
@@ -25,6 +26,14 @@ const currentRoot = ref('')
 const folders = ref<string[]>([])
 const items = ref<MediaItem[]>([])
 const loading = ref(false)
+const loadingMore = ref(false)
+const moreError = ref('')
+const page = ref(1)
+const afterPath = ref<string>()
+const hasNext = ref(false)
+const total = ref(0)
+const error = ref('')
+const requests = createLatestRequest()
 const showRoots = ref(true)
 const importTask = useImportTask()
 const mediaType = ref<MediaType | null>(null)
@@ -69,13 +78,15 @@ function setMediaType(type: MediaType | null) {
 }
 
 onMounted(loadRoots)
+onUnmounted(() => requests.cancel())
 
 async function loadRoots() {
-  loading.value = true
-  const res = await fetchBrowse()
-  roots.value = res.roots
   showRoots.value = true
-  loading.value = false
+  error.value = ''
+  moreError.value = ''
+  await requests.run(signal => fetchBrowse(undefined, undefined, undefined, signal), res => {
+    roots.value = res.roots
+  }, failure => { error.value = failure instanceof Error ? failure.message : '媒体库读取失败' }, value => { loading.value = value })
 }
 
 async function enterRoot(root: BrowseRoot) {
@@ -91,11 +102,13 @@ async function enterFolder(folder: string) {
 }
 
 function goHome() {
+  requests.cancel()
   currentPath.value = []
   currentRoot.value = ''
   showRoots.value = true
   folders.value = []
   items.value = []
+  void loadRoots()
 }
 
 async function navigateTo(idx: number) {
@@ -104,12 +117,44 @@ async function navigateTo(idx: number) {
 }
 
 async function loadFolder() {
-  loading.value = true
+  error.value = ''
+  folders.value = []
+  items.value = []
+  moreError.value = ''
+  page.value = 1
+  afterPath.value = undefined
+  hasNext.value = false
+  total.value = 0
   const subdir = currentPath.value.length > 1 ? currentPath.value.slice(1).join('/') : undefined
-  const res = await fetchBrowse(currentRoot.value, subdir, mediaType.value)
-  folders.value = res.folders
-  items.value = res.items
-  loading.value = false
+  await requests.run(signal => fetchBrowse(currentRoot.value, subdir, mediaType.value, signal), res => {
+    folders.value = res.folders
+    items.value = res.items
+    total.value = res.total
+    hasNext.value = res.has_next
+    afterPath.value = res.items.at(-1)?.file_path
+  }, failure => { error.value = failure instanceof Error ? failure.message : '目录读取失败' }, value => { loading.value = value })
+}
+
+async function loadMore() {
+  if (loading.value || loadingMore.value || !hasNext.value || showRoots.value) return
+  moreError.value = ''
+  const nextPage = page.value + 1
+  const subdir = currentPath.value.slice(1).join('/') || undefined
+  await requests.run(signal => fetchBrowse(currentRoot.value, subdir, mediaType.value, signal, nextPage, afterPath.value), res => {
+    const ids = new Set(items.value.map(item => item.id))
+    items.value.push(...res.items.filter(item => !ids.has(item.id)))
+    page.value = nextPage
+    total.value = res.total
+    hasNext.value = res.has_next
+    afterPath.value = res.items.at(-1)?.file_path ?? afterPath.value
+  }, failure => { moreError.value = failure instanceof Error ? failure.message : '媒体读取失败' }, value => { loadingMore.value = value })
+}
+
+function retry() { if (showRoots.value) void loadRoots(); else void loadFolder() }
+function goUp() { if (currentPath.value.length > 1) void navigateTo(currentPath.value.length - 2); else goHome() }
+function removeUnavailable(id: string) {
+  if (items.value.some(item => item.id === id)) total.value = Math.max(0, total.value - 1)
+  items.value = items.value.filter(item => item.id !== id)
 }
 
 function onItemUpdated(updated: MediaItem) {
@@ -158,9 +203,10 @@ watch(importTask.revision, async () => {
               <span class="hidden md:inline">导入</span>
             </button>
             <template v-if="!showRoots">
-              <span class="text-xs text-gray-500 tabular-nums">{{ items.length }}</span>
+              <span class="text-xs text-gray-500 tabular-nums">{{ items.length }} / {{ total }}</span>
               <button
                 @click="showRoaming = true"
+                :disabled="loading || !!error || !items.length"
                 :class="['w-8 h-8 flex items-center justify-center rounded-full transition-colors shrink-0', isDark ? 'bg-gray-800 text-blue-400 hover:bg-gray-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300']"
                 title="漫游当前文件夹（不含子文件夹）"
                 aria-label="漫游当前文件夹"
@@ -172,6 +218,7 @@ watch(importTask.revision, async () => {
               <button
                 v-if="!showTurbo"
                 @click="showTurbo = true"
+                :disabled="loading || !!error || !items.length"
                 class="flex w-8 h-8 items-center justify-center rounded-full bg-gray-800 text-yellow-400 hover:bg-gray-700 transition-colors shrink-0"
                 title="极速浏览当前文件夹（不含子文件夹）"
                 aria-label="极速浏览当前文件夹"
@@ -271,18 +318,28 @@ watch(importTask.revision, async () => {
       <main class="px-4 lg:px-6 py-4">
         <div v-if="loading" class="py-12 text-center text-gray-400">加载中...</div>
 
+        <div v-else-if="error" class="py-12 text-center text-gray-400" role="alert">
+          <p>{{ error }}</p>
+          <div class="flex justify-center gap-4 mt-4 text-sm text-blue-400">
+            <button @click="retry">重试</button>
+            <button v-if="!showRoots" @click="goUp">返回上级</button>
+            <button @click="goHome">返回媒体库</button>
+          </div>
+        </div>
+
         <div v-else-if="showRoots" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
           <button
             v-for="root in roots"
             :key="root.path"
             @click="enterRoot(root)"
-            :class="['p-4 rounded-xl border text-left transition-colors', isDark ? 'bg-gray-900 border-gray-800 hover:bg-gray-800' : 'bg-white border-gray-200 hover:bg-gray-100']"
+            :class="['p-4 rounded-xl border text-left transition-colors', root.availability !== 'available' ? 'opacity-50' : '', isDark ? 'bg-gray-900 border-gray-800 hover:bg-gray-800' : 'bg-white border-gray-200 hover:bg-gray-100']"
           >
             <svg class="w-8 h-8 mb-2 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
               <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/>
             </svg>
             <p class="text-sm font-medium truncate">{{ root.name }}</p>
-            <p class="text-xs text-gray-500">{{ root.count }} 个文件</p>
+            <p class="text-xs text-gray-500">{{ root.count }} 个索引文件</p>
+            <p v-if="root.availability !== 'available'" class="text-xs text-amber-500 mt-1">暂不可访问 · 点击复查</p>
           </button>
         </div>
 
@@ -313,10 +370,17 @@ watch(importTask.revision, async () => {
                 :item="item"
                 @click="emit('play', $event)"
                 @updated="onItemUpdated"
+                @unavailable="removeUnavailable"
               />
             </div>
           </div>
           <div v-else-if="!folders.length" class="py-12 text-center text-gray-500">此目录无媒体文件</div>
+          <div v-if="hasNext" class="text-center py-6">
+            <p v-if="moreError" class="text-amber-500 text-sm mb-3" role="alert">{{ moreError }}</p>
+            <button :disabled="loadingMore" @click="loadMore" class="text-sm text-blue-400 disabled:opacity-50">
+              {{ loadingMore ? '加载中…' : moreError ? '重试加载更多' : '加载更多' }}
+            </button>
+          </div>
         </template>
       </main>
 

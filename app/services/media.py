@@ -2,6 +2,7 @@ import asyncio
 import os
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
 
@@ -11,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.media import Media, MediaType
 from app.schemas.media import FeedResponse, MediaOut
+from app.schemas.media import AvailabilityFilter
+from app.services.availability import refresh_directories, require_directory, validated_rows
 from app.services.thumbnail import generate_thumbnail, generate_preview
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -156,8 +159,12 @@ async def scan_directory_stats(
                 if preview and not media.preview_path:
                     pending_previews.append((resolved, media.id))
             if existing:
+                media.availability = "available"
+                media.availability_checked_at = datetime.now()
                 stats["existing_count"] += 1
             else:
+                media.availability = "available"
+                media.availability_checked_at = datetime.now()
                 db.add(media)
                 stats["added_count"] += 1
             await save()
@@ -224,6 +231,7 @@ async def get_feed(
     folder_exact: bool = False,
     folder_after: str | None = None,
     sort: FeedSort = "created_desc",
+    availability: AvailabilityFilter = "available",
 ) -> FeedResponse:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -248,7 +256,14 @@ async def get_feed(
         query = query.where(Media.is_damaged == is_damaged)
         count_query = count_query.where(Media.is_damaged == is_damaged)
 
-    total = (await db.execute(count_query)).scalar_one()
+    if availability != "all":
+        query = query.where(Media.availability == availability)
+        count_query = count_query.where(Media.availability == availability)
+    if availability == "available":
+        roots = await refresh_directories(db, folder=folder if folder_exact else None)
+        offline = [root for root, state in roots.items() if state["status"] != "available"]
+        if offline:
+            query = query.where(or_(Media.root_dir.is_(None), Media.root_dir.notin_(offline)))
     offset = (page - 1) * page_size
 
     if sort == "file_path_asc":
@@ -256,9 +271,12 @@ async def get_feed(
     elif sort == "size_desc":
         query = query.order_by(Media.size_bytes.desc(), Media.file_path.asc())
     else:
-        query = query.order_by(Media.created_at.desc())
-    query = query.offset(offset).limit(page_size + 1)
-    rows = (await db.execute(query)).scalars().all()
+        query = query.order_by(Media.created_at.desc(), Media.id.asc())
+    if availability == "available":
+        rows = await validated_rows(db, query, offset=offset, limit=page_size + 1)
+    else:
+        rows = (await db.scalars(query.offset(offset).limit(page_size + 1))).all()
+    total = (await db.execute(count_query)).scalar_one()
 
     has_next = len(rows) > page_size
     items = [MediaOut.model_validate(m) for m in rows[:page_size]]
@@ -281,6 +299,7 @@ async def get_random_media(
     is_deleted: bool | None = None,
     is_damaged: bool | None = None,
     folder: str | None = None,
+    availability: AvailabilityFilter = "available",
 ) -> dict:
     query = select(Media)
     count_query = select(func.count(Media.id))
@@ -306,10 +325,19 @@ async def get_random_media(
         query = query.where(Media.is_damaged == is_damaged)
         count_query = count_query.where(Media.is_damaged == is_damaged)
 
-    query = query.order_by(func.random()).limit(count)
-
-    result = await db.execute(query)
-    items = [MediaOut.model_validate(m) for m in result.scalars().all()]
+    if availability != "all":
+        query = query.where(Media.availability == availability)
+        count_query = count_query.where(Media.availability == availability)
+    query = query.order_by(func.random())
+    if availability == "available":
+        roots = await refresh_directories(db, folder=folder)
+        offline = [root for root, state in roots.items() if state["status"] != "available"]
+        if offline:
+            query = query.where(or_(Media.root_dir.is_(None), Media.root_dir.notin_(offline)))
+        rows = await validated_rows(db, query, offset=0, limit=count)
+    else:
+        rows = (await db.scalars(query.limit(count))).all()
+    items = [MediaOut.model_validate(m) for m in rows]
 
     total = (await db.execute(count_query)).scalar_one()
 
@@ -321,7 +349,12 @@ async def browse_folders(
     root_dir: str | None = None,
     subdir: str | None = None,
     media_type: MediaType | None = None,
+    page: int = 1,
+    page_size: int = 60,
+    after_path: str | None = None,
 ) -> dict:
+    target_dir = os.path.normpath(os.path.join(root_dir, subdir)) if root_dir and subdir else root_dir
+    root_states = await refresh_directories(db, root=root_dir, folder=target_dir)
     if root_dir is None:
         result = await db.execute(
             select(Media.root_dir, func.count(Media.id))
@@ -329,27 +362,31 @@ async def browse_folders(
             .group_by(Media.root_dir)
         )
         roots = [
-            {"path": r, "name": Path(r).name, "count": c}
+            {"path": r, "name": Path(r).name, "count": c,
+             "availability": root_states.get(r, {"status": "unavailable"})["status"]}
             for r, c in result.all()
         ]
-        return {"roots": roots, "folders": [], "items": []}
+        return {"roots": roots, "folders": [], "items": [], "total": 0,
+                "page": page, "page_size": page_size, "has_next": False}
 
-    target_dir = str(Path(root_dir) / subdir) if subdir else root_dir
+    await require_directory(root_dir, target_dir)
 
     # Media directly in this directory, sorted by filename
-    query = select(Media).where(Media.folder == target_dir)
+    query = select(Media).where(Media.root_dir == root_dir, Media.folder == target_dir, Media.availability == "available")
     if media_type:
         query = query.where(Media.media_type == media_type)
     query = query.order_by(Media.file_path)
-    direct_result = await db.execute(query)
-    items = [MediaOut.model_validate(m) for m in direct_result.scalars().all()]
+    page_query = query.where(Media.file_path > after_path) if after_path else query
+    rows = await validated_rows(db, page_query, offset=0 if after_path else (page - 1) * page_size, limit=page_size + 1)
+    items = [MediaOut.model_validate(m) for m in rows[:page_size]]
+    total = (await db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))) or 0
 
     # Find immediate subdirectories
     sep = os.sep
     prefix = target_dir + sep
     sub_result = await db.execute(
         select(Media.folder)
-        .where(Media.root_dir == root_dir, Media.folder.startswith(prefix))
+        .where(Media.root_dir == root_dir, Media.folder.startswith(prefix, autoescape=True), Media.availability == "available")
         .distinct()
     )
     subdirs = sorted({
@@ -357,7 +394,8 @@ async def browse_folders(
         for (folder,) in sub_result.all()
     })
 
-    return {"roots": [], "folders": subdirs, "items": items}
+    return {"roots": [], "folders": subdirs, "items": items, "total": total,
+            "page": page, "page_size": page_size, "has_next": len(rows) > page_size}
 
 
 async def get_media(db: AsyncSession, media_id: str) -> Media | None:

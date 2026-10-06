@@ -7,6 +7,7 @@ const FEED_BATCH_SIZE = 80
 export function useFeed() {
   const items = ref<MediaItem[]>([])
   const loading = ref(false)
+  const error = ref('')
   const hasMore = ref(true)
   const total = ref(0)
   const mediaType = ref<MediaType | null>(null)
@@ -15,6 +16,7 @@ export function useFeed() {
   async function loadMore() {
     if (loading.value || !hasMore.value) return
     loading.value = true
+    error.value = ''
     try {
       const res = await fetchRandom(FEED_BATCH_SIZE, [...loadedIds.value], mediaType.value)
       for (const item of res.items) {
@@ -23,6 +25,8 @@ export function useFeed() {
       items.value.push(...res.items)
       total.value = res.total
       if (res.items.length < FEED_BATCH_SIZE) hasMore.value = false
+    } catch (failure) {
+      error.value = failure instanceof Error ? failure.message : '媒体加载失败，请重试'
     } finally {
       loading.value = false
     }
@@ -42,5 +46,5 @@ export function useFeed() {
 
   loadMore()
 
-  return { items, loading, hasMore, total, mediaType, loadMore, refresh, setMediaType }
+  return { items, loading, error, hasMore, total, mediaType, loadMore, refresh, setMediaType }
 }

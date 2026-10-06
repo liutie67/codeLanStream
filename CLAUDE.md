@@ -15,13 +15,15 @@ PYTHONPATH=. uv run python scripts/scan_mock.py [目录1] [目录2] ...  # 扫�
 uv run python scripts/generate_test_media.py  # 生成测试媒体文件到 test_media/
 uv sync                                     # 安装/更新依赖
 uv add <包名>                               # 添加新依赖
+uv run python -m unittest discover -s tests  # 后端回归测试
 
 # 前端
 cd frontend && npm run dev                  # 启动前端开发服务器 (localhost:5173, 代理 /api → 后端)
 cd frontend && npm run build                # 构建前端生产版本
+cd frontend && npm run test                 # Vitest 前端回归测试
 ```
 
-尚未配置测试框架。
+后端使用 unittest，测试位于 `tests/`；前端使用 Vitest，测试文件为 `frontend/src/**/*.test.ts`。提交前运行两套测试及前端构建；涉及文件系统的测试使用临时目录和 SQLite，不依赖个人媒体路径。
 
 ## 架构
 

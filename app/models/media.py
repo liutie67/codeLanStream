@@ -34,6 +34,8 @@ class Media(Base):
     is_favorited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_damaged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    availability: Mapped[str] = mapped_column(String(16), nullable=False, default="available", server_default="available", index=True)
+    availability_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

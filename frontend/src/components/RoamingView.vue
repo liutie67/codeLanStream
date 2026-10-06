@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { MediaItem, MediaType } from '../api/types'
-import { fetchFeed, fetchRandom, getStreamUrl, getPreviewUrl, getThumbnailUrl, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
+import { fetchFeed, fetchRandom, getStreamUrl, getPreviewUrl, getThumbnailUrl, toggleFavorite, toggleDelete, toggleDamaged, recheckMedia } from '../api/client'
 import { useSwipe, type SwipeDirection } from '../composables/useSwipe'
 import { useThumbnailMode } from '../composables/useThumbnailMode'
 import TypeFilter from './TypeFilter.vue'
@@ -27,6 +27,12 @@ const loadedIds = ref<Set<string>>(new Set())
 const mediaType = ref<MediaType | null>(null)
 const hideMarked = ref(false)
 const loading = ref(false)
+const failure = ref('')
+const failedImages = ref(new Set<string>())
+const mediaAttempts = ref<Record<string, number>>({})
+const checkingMedia = new Set<string>()
+const retryingMedia = ref(new Set<string>())
+const batchFailure = ref(false)
 const hasMore = ref(true)
 const isLocked = ref(false)
 const browseMode = ref<BrowseMode>('random')
@@ -138,21 +144,31 @@ const keyIconStyle = computed(() => ({
 
 function getVideoPosterUrl(item: MediaItem): string | null {
   if (item.media_type !== 'video') return null
-  if (thumbMode.value === 'grid' && item.preview_path) return getPreviewUrl(item.id)
-  if (item.thumbnail_path) return getThumbnailUrl(item.id)
-  if (item.preview_path) return getPreviewUrl(item.id)
-  return null
+  const sources = thumbMode.value === 'grid'
+    ? [item.preview_path && getPreviewUrl(item.id), item.thumbnail_path && getThumbnailUrl(item.id)]
+    : [item.thumbnail_path && getThumbnailUrl(item.id), item.preview_path && getPreviewUrl(item.id)]
+  return sources.filter(Boolean).map(url => attemptUrl(item, url as string)).find(url => !failedImages.value.has(url)) || null
+}
+
+function attemptUrl(item: MediaItem, url: string): string {
+  const attempt = mediaAttempts.value[item.id] || 0
+  return attempt ? `${url}?retry=${attempt}` : url
 }
 
 function getPassiveMediaUrl(item: MediaItem | null): string | null {
   if (!item) return null
-  if (item.media_type === 'image') return getStreamUrl(item.id)
+  if (retryingMedia.value.has(item.id)) return null
+  if (item.media_type === 'image') {
+    const url = attemptUrl(item, getStreamUrl(item.id))
+    return failedImages.value.has(url) ? null : url
+  }
   return getVideoPosterUrl(item)
 }
 
 const prevDisplayUrl = computed(() => getPassiveMediaUrl(prevItem.value))
 const nextDisplayUrl = computed(() => getPassiveMediaUrl(nextItem.value))
 const currentVideoPosterUrl = computed(() => current.value ? getVideoPosterUrl(current.value) : null)
+const currentStreamUrl = computed(() => current.value ? attemptUrl(current.value, getStreamUrl(current.value.id)) : '')
 const shortcutGroups = [
   {
     title: '浏览',
@@ -417,6 +433,8 @@ async function handleSwipe(direction: SwipeDirection) {
 async function loadMore() {
   if (loading.value || !hasMore.value) return
   loading.value = true
+  failure.value = ''
+  batchFailure.value = false
   try {
     let nextItems: MediaItem[] = []
     if (browseMode.value === 'random') {
@@ -466,9 +484,67 @@ async function loadMore() {
       items.value.push(item)
     }
     schedulePreload()
+  } catch (error) {
+    failure.value = error instanceof Error ? error.message : '媒体加载失败'
+    batchFailure.value = true
   } finally {
     loading.value = false
   }
+}
+
+function removeUnavailableItem(id: string) {
+  const index = items.value.findIndex(row => row.id === id)
+  if (index === -1) return
+  items.value.splice(index, 1)
+  if (index < currentIndex.value) currentIndex.value--
+  currentIndex.value = Math.min(currentIndex.value, Math.max(0, items.value.length - 1))
+  releasePreloadForId(id)
+  if (!items.value.length && hasMore.value) void loadMore()
+}
+
+async function onMediaError(item: MediaItem, event?: Event, imageUrl?: string | null) {
+  const target = event?.target
+  const cacheOnly = target instanceof HTMLImageElement && item.media_type === 'video'
+  if (target instanceof HTMLImageElement && target.getAttribute('src') !== imageUrl) return
+  if (target instanceof HTMLImageElement && imageUrl) failedImages.value.add(imageUrl)
+  const attempt = mediaAttempts.value[item.id] || 0
+  const key = `${item.id}:${attempt}`
+  if (checkingMedia.has(key)) return
+  checkingMedia.add(key)
+  if (!cacheOnly && current.value?.id === item.id) {
+    batchFailure.value = false
+    failure.value = '媒体加载失败，正在复查…'
+  }
+  try {
+    const [result] = await recheckMedia([item.id])
+    if ((mediaAttempts.value[item.id] || 0) !== attempt) return
+    if (!result || result.availability !== 'available') {
+      removeUnavailableItem(item.id)
+    } else if (!cacheOnly && current.value?.id === item.id) failure.value = '媒体加载失败，请重试或检查文件格式'
+  } catch {
+    if ((mediaAttempts.value[item.id] || 0) === attempt && !cacheOnly && current.value?.id === item.id) failure.value = '无法读取媒体，请检查硬盘或网络后重试'
+  } finally { checkingMedia.delete(key) }
+}
+
+async function retryMedia() {
+  failure.value = ''
+  if (batchFailure.value) { await loadMore(); return }
+  const item = current.value
+  if (!item) { await loadMore(); return }
+  if (retryingMedia.value.has(item.id)) return
+  releasePreloadForId(item.id)
+  mediaAttempts.value[item.id] = (mediaAttempts.value[item.id] || 0) + 1
+  // Refresh metadata before the new URL is mounted. A restored/replaced file
+  // can have a different size from the short-lived delivery cache.
+  retryingMedia.value.add(item.id)
+  try {
+    const [result] = await recheckMedia([item.id])
+    if (!result || result.availability !== 'available') removeUnavailableItem(item.id)
+  } catch {
+    if (current.value?.id === item.id) failure.value = '无法读取媒体，请检查硬盘或网络后重试'
+  } finally { retryingMedia.value.delete(item.id) }
+  if (item.media_type === 'video' && current.value?.id === item.id) void nextTick(() => videoEl.value?.load())
+  schedulePreload()
 }
 
 function feedFilterParams(): Pick<Parameters<typeof fetchFeed>[0], 'media_type' | 'is_favorited' | 'is_deleted' | 'is_damaged'> {
@@ -551,6 +627,10 @@ async function loadFolderModeItems(): Promise<MediaItem[]> {
 function resetRoamingItems() {
   releaseMediaElement(videoEl.value)
   clearPreloadCache()
+  failedImages.value.clear()
+  mediaAttempts.value = {}
+  retryingMedia.value.clear()
+  batchFailure.value = false
   items.value = []
   loadedIds.value = new Set()
   currentIndex.value = 0
@@ -598,6 +678,7 @@ const feedbackOpacity = computed(() => Math.min(0.5, Math.abs(offsetX.value) / 2
 
 // Video auto-play + volume persistence
 watch(current, async (item, previousItem) => {
+  failure.value = item?.media_type === 'image' && !getPassiveMediaUrl(item) ? '媒体加载失败，请重试' : ''
   if (previousItem?.media_type === 'video') {
     releaseMediaElement(videoEl.value)
   }
@@ -852,14 +933,17 @@ onUnmounted(() => {
       >
         <img
           v-if="prevDisplayUrl"
+          :key="prevDisplayUrl"
           :src="prevDisplayUrl"
+          @error="onMediaError(prevItem, $event, prevDisplayUrl)"
           :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
         />
         <div
           v-else
           class="flex aspect-video w-full max-w-4xl items-center justify-center rounded-lg bg-black"
         >
-          <svg class="w-16 h-16 text-white/55" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          <span v-if="prevItem.media_type === 'image'" class="text-white/55">图片加载失败</span>
+          <svg v-else class="w-16 h-16 text-white/55" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
         </div>
       </div>
 
@@ -874,16 +958,21 @@ onUnmounted(() => {
           transition: hasTransition ? 'transform 200ms ease-out' : 'none',
         }"
       >
-        <img
-          v-if="current.media_type === 'image'"
-          :src="getStreamUrl(current.id)"
-          :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
-          :style="rotatedMediaStyle"
-        />
+        <template v-if="current.media_type === 'image'">
+          <img
+            v-if="!retryingMedia.has(current.id) && !failedImages.has(currentStreamUrl)"
+            :key="currentStreamUrl"
+            :src="currentStreamUrl"
+            @error="onMediaError(current, $event, currentStreamUrl)"
+            :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
+            :style="rotatedMediaStyle"
+          />
+          <div v-else class="text-white/55">{{ retryingMedia.has(current.id) ? '正在重试…' : '图片加载失败' }}</div>
+        </template>
         <video
-          v-else
+          v-else-if="!retryingMedia.has(current.id)"
           ref="videoEl"
-          :src="getStreamUrl(current.id)"
+          :src="currentStreamUrl"
           :poster="currentVideoPosterUrl || undefined"
           preload="auto"
           muted
@@ -895,6 +984,7 @@ onUnmounted(() => {
           @pause="videoPaused = true"
           @play="videoPaused = false"
           @volumechange="onVolumeChange"
+          @error="onMediaError(current)"
         />
         <div
           v-if="current.media_type === 'video' && thumbMode === 'grid' && videoPaused && currentVideoPosterUrl"
@@ -902,7 +992,9 @@ onUnmounted(() => {
           @click.stop="videoEl && videoEl.play()"
         >
           <img
+            :key="currentVideoPosterUrl"
             :src="currentVideoPosterUrl"
+            @error="onMediaError(current, $event, currentVideoPosterUrl)"
             :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
             :style="rotatedMediaStyle"
           />
@@ -934,18 +1026,24 @@ onUnmounted(() => {
       >
         <img
           v-if="nextDisplayUrl"
+          :key="nextDisplayUrl"
           :src="nextDisplayUrl"
+          @error="onMediaError(nextItem, $event, nextDisplayUrl)"
           :class="fillViewport ? 'w-full h-full object-contain rounded-lg' : 'max-w-full max-h-full object-contain rounded-lg'"
         />
         <div
           v-else
           class="flex aspect-video w-full max-w-4xl items-center justify-center rounded-lg bg-black"
         >
-          <svg class="w-16 h-16 text-white/55" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          <span v-if="nextItem.media_type === 'image'" class="text-white/55">图片加载失败</span>
+          <svg v-else class="w-16 h-16 text-white/55" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
         </div>
       </div>
 
       <div v-if="!current && loading" class="absolute inset-0 flex items-center justify-center text-white/50">加载中...</div>
+      <div v-if="failure" class="absolute bottom-20 inset-x-4 text-center text-amber-300 bg-black/80 rounded-lg p-3 text-sm" role="alert" @click.stop>
+        {{ failure }} <button @click="retryMedia" class="ml-3 text-blue-400">重试</button>
+      </div>
       <div v-if="!current && !loading && !hasMore" class="absolute inset-0 flex items-center justify-center text-white/50">已浏览全部</div>
     </div>
 

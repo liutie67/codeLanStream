@@ -1,8 +1,10 @@
+import asyncio
 import os
 from pathlib import Path
+from typing import Awaitable, TypeVar
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
@@ -10,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.media import Media, MediaType
-from app.schemas.media import FeedResponse
+from app.schemas.media import AvailabilityFilter, FeedResponse, MediaOut
+from app.services.availability import (
+    BROWSE_TIMEOUT, SourceUnavailable, check_records, file_info, remove_records, snapshot, source_error,
+)
+from app.services.availability_jobs import (
+    cancel_check_job, get_check_job, list_check_jobs, start_check_job,
+)
+from app.services.disk_probe import probe
 from app.services.import_jobs import (
     ImportConflict, cancel_import_job, get_import_job, list_import_jobs, start_import_job,
 )
@@ -25,6 +34,26 @@ from app.services.media import (
 router = APIRouter(prefix="/api/media", tags=["media"])
 
 CHUNK_SIZE = 64 * 1024  # 64KB
+ResponseT = TypeVar("ResponseT")
+
+
+async def bounded(operation: Awaitable[ResponseT]) -> ResponseT:
+    try:
+        async with asyncio.timeout(BROWSE_TIMEOUT):
+            return await operation
+    except SourceUnavailable as error:
+        raise HTTPException(error.status, error.message) from error
+    except TimeoutError as error:
+        raise HTTPException(503, "读取媒体来源超时，请稍后重试") from error
+
+
+async def file_size_on_disk(path: str, *, cached_image: bool = False) -> int:
+    info = await file_info(path)
+    if info["status"] != "available":
+        if cached_image and info["status"] == "missing":
+            raise SourceUnavailable(404, "缓存图片不存在，请使用备用封面或重新生成缓存")
+        raise source_error(info)
+    return info["size"]
 
 
 @router.get("/thumbnail/{media_id}")
@@ -35,9 +64,8 @@ async def get_thumbnail(
     media = await get_media(db, media_id)
     if not media or not media.thumbnail_path:
         raise HTTPException(404, "Thumbnail not found")
-    if not os.path.exists(media.thumbnail_path):
-        raise HTTPException(404, "Thumbnail file missing")
-    return _full_response(media.thumbnail_path, os.path.getsize(media.thumbnail_path), "image/jpeg")
+    size = await bounded(file_size_on_disk(media.thumbnail_path, cached_image=True))
+    return _full_response(media.thumbnail_path, size, "image/jpeg")
 
 
 @router.get("/preview/{media_id}")
@@ -48,15 +76,14 @@ async def get_preview(
     media = await get_media(db, media_id)
     if not media or not media.preview_path:
         raise HTTPException(404, "Preview not found")
-    if not os.path.exists(media.preview_path):
-        raise HTTPException(404, "Preview file missing")
-    return _full_response(media.preview_path, os.path.getsize(media.preview_path), "image/png")
+    size = await bounded(file_size_on_disk(media.preview_path, cached_image=True))
+    return _full_response(media.preview_path, size, "image/png")
 
 
 @router.get("/feed", response_model=FeedResponse)
 async def feed(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     media_type: MediaType | None = None,
     folder: str | None = None,
     is_favorited: bool | None = None,
@@ -65,9 +92,10 @@ async def feed(
     folder_exact: bool = False,
     folder_after: str | None = None,
     sort: FeedSort = "created_desc",
+    availability: AvailabilityFilter = "available",
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_feed(
+    return await bounded(get_feed(
         db,
         page,
         page_size,
@@ -79,23 +107,25 @@ async def feed(
         folder_exact,
         folder_after,
         sort,
-    )
+        availability,
+    ))
 
 
 class RandomRequest(BaseModel):
-    count: int = 50
-    exclude_ids: list[str] = []
+    count: int = Field(50, ge=1, le=200)
+    exclude_ids: list[str] = Field(default_factory=list)
     media_type: MediaType | None = None
     is_favorited: bool | None = None
     is_deleted: bool | None = None
     is_damaged: bool | None = None
     folder: str | None = None
+    availability: AvailabilityFilter = "available"
 
 
 @router.post("/random")
 async def random_media(body: RandomRequest, db: AsyncSession = Depends(get_db)):
     exclude = body.exclude_ids or None
-    return await get_random_media(
+    return await bounded(get_random_media(
         db,
         body.count,
         exclude,
@@ -104,7 +134,8 @@ async def random_media(body: RandomRequest, db: AsyncSession = Depends(get_db)):
         body.is_deleted,
         body.is_damaged,
         body.folder,
-    )
+        body.availability,
+    ))
 
 
 @router.get("/browse")
@@ -112,9 +143,17 @@ async def browse(
     root_dir: str | None = None,
     subdir: str | None = None,
     media_type: MediaType | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(60, ge=1, le=200),
+    after_path: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    return await browse_folders(db, root_dir, subdir, media_type)
+    if root_dir:
+        root_dir = os.path.abspath(os.path.expanduser(root_dir))
+        target = os.path.abspath(os.path.join(root_dir, subdir or ""))
+        if os.path.commonpath([root_dir, target]) != root_dir:
+            raise HTTPException(400, "子目录必须位于媒体根目录内")
+    return await bounded(browse_folders(db, root_dir, subdir, media_type, page, page_size, after_path))
 
 
 @router.get("/stream/{media_id}")
@@ -127,11 +166,20 @@ async def stream_media(
     if not media:
         raise HTTPException(404, "Media not found")
 
-    file_path = media.file_path
-    if not os.path.exists(file_path):
-        raise HTTPException(404, "File not found on disk")
+    async def prepare():
+        observations = {}
+        checked = await check_records(db, [snapshot(media)], force=False, observations=observations)
+        if not checked:
+            raise HTTPException(404, "Media not found")
+        info = observations.get(media_id)
+        if not info or checked[0].file_path != file_path:
+            raise SourceUnavailable(503, "媒体记录已变化，请重试")
+        if checked[0].availability != "available" or info["status"] != "available":
+            raise source_error({**info, "status": checked[0].availability})
+        return info["size"]
 
-    file_size = os.path.getsize(file_path)
+    file_path = media.file_path
+    file_size = await bounded(prepare())
     mime_type = get_mime_type(file_path)
     range_header = request.headers.get("range")
 
@@ -148,7 +196,7 @@ async def stream_media(
 
     content_length = end - start + 1
 
-    async def iter_file():
+    def iter_file():
         with open(file_path, "rb") as f:
             f.seek(start)
             remaining = content_length
@@ -172,7 +220,9 @@ async def stream_media(
 
 
 def _full_response(file_path: str, file_size: int, mime_type: str) -> StreamingResponse:
-    async def iter_file():
+    # Starlette runs synchronous iterators in its thread pool, keeping disk
+    # reads off the ASGI event loop throughout the response.
+    def iter_file():
         with open(file_path, "rb") as f:
             while chunk := f.read(CHUNK_SIZE):
                 yield chunk
@@ -266,35 +316,58 @@ async def batch(body: BatchRequest, db: AsyncSession = Depends(get_db)):
 
 @router.get("/manage/directories")
 async def list_directories(path: str | None = None):
-    target = Path(path).expanduser().resolve() if path else Path.home().resolve()
-    if not target.exists():
-        raise HTTPException(404, "Directory not found")
-    if not target.is_dir():
-        raise HTTPException(400, "Path is not a directory")
+    target = os.path.abspath(os.path.expanduser(path)) if path else str(Path.home())
+    async def enumerate_target():
+        result = await probe({"action": "directories", "path": target})
+        if result["status"] != "available":
+            raise source_error(result, directory=True)
+        parent = os.path.dirname(target)
+        return {"path": target, "parent": parent if parent != target else None,
+                "directories": result["directories"]}
+    return await bounded(enumerate_target())
 
-    directories = []
-    try:
-        children = list(target.iterdir())
-    except PermissionError:
-        raise HTTPException(403, "Permission denied")
 
-    for child in children:
-        try:
-            if child.is_dir():
-                directories.append({
-                    "name": child.name,
-                    "path": str(child.resolve()),
-                })
-        except OSError:
-            continue
+class AvailabilityIds(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)
 
-    directories.sort(key=lambda item: item["name"].lower())
-    parent = str(target.parent) if target.parent != target else None
-    return {
-        "path": str(target),
-        "parent": parent,
-        "directories": directories,
-    }
+
+@router.post("/manage/availability/probe", response_model=list[MediaOut])
+async def recheck_media(body: AvailabilityIds, db: AsyncSession = Depends(get_db)):
+    async def recheck():
+        rows = (await db.scalars(select(Media).where(Media.id.in_(body.ids)))).all()
+        return [MediaOut.model_validate(row) for row in await check_records(db, [snapshot(row) for row in rows])]
+    return await bounded(recheck())
+
+
+@router.post("/manage/availability/remove-records")
+async def remove_media_records(body: AvailabilityIds, db: AsyncSession = Depends(get_db)):
+    return {"removed_count": await bounded(remove_records(db, body.ids))}
+
+
+@router.post("/manage/availability/check")
+async def create_availability_check():
+    return await start_check_job()
+
+
+@router.get("/manage/availability/check")
+async def availability_checks():
+    return list_check_jobs()
+
+
+@router.get("/manage/availability/check/{job_id}")
+async def availability_check(job_id: str):
+    job = get_check_job(job_id)
+    if job is None:
+        raise HTTPException(404, "检查任务不存在")
+    return job
+
+
+@router.post("/manage/availability/check/{job_id}/cancel")
+async def stop_availability_check(job_id: str):
+    job = await cancel_check_job(job_id)
+    if job is None:
+        raise HTTPException(404, "检查任务不存在")
+    return job
 
 
 @router.get("/manage/import-target", response_model=ImportTargetInfo)
@@ -302,8 +375,7 @@ async def import_target(path: str, db: AsyncSession = Depends(get_db)):
     if not path.strip():
         raise HTTPException(400, "Path is required")
 
-    target = Path(path).expanduser().resolve()
-    target_path = str(target)
+    target_path = os.path.abspath(os.path.expanduser(path))
     target_prefix = target_path + os.sep
     result = await db.execute(
         select(func.count(Media.id)).where(

@@ -10,9 +10,11 @@ LanStream 采用前后端分离架构：后端是 FastAPI，前端是 Vue 3 + Vi
 - `uv run python main.py`：启动后端服务，默认监听 `0.0.0.0:8000`。
 - `PYTHONPATH=. uv run python scripts/scan_mock.py /path/to/media`：扫描媒体文件并写入 SQLite。
 - `uv run python scripts/generate_test_media.py`：生成测试媒体到 `test_media/`。
+- `uv run python -m unittest discover -s tests`：执行后端 unittest 回归测试。
 - `cd frontend && npm install`：安装前端依赖。
 - `cd frontend && npm run dev`：启动 Vite 开发服务器，默认端口 `5173`。
 - `cd frontend && npm run build`：执行 `vue-tsc` 类型检查并构建生产资源。
+- `cd frontend && npm run test`：执行前端 Vitest 回归测试。
 
 ## 编码风格与命名约定
 
@@ -20,7 +22,7 @@ LanStream 采用前后端分离架构：后端是 FastAPI，前端是 Vue 3 + Vi
 
 ## 测试指南
 
-当前尚未配置自动化测试框架。提交前至少运行 `cd frontend && npm run build`，并用 `uv run python main.py` 手动验证受影响的后端接口或前端流程。新增测试时，请同步记录运行命令，保持 fixture 体积小，并避免依赖个人本地媒体路径。
+后端使用 unittest（`tests/`），前端使用 Vitest（`frontend/src/**/*.test.ts`）。提交前运行后端测试、前端测试和 `cd frontend && npm run build`；涉及 UI 的改动需手动验证受影响流程。新增测试时，请同步记录运行命令，保持 fixture 体积小，并避免依赖个人本地媒体路径。
 
 ## 提交与 Pull Request 规范
 

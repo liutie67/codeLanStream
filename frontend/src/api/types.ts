@@ -1,5 +1,7 @@
 export type MediaType = 'video' | 'image'
 export type ExportTag = 'favorited' | 'deleted' | 'damaged'
+export type Availability = 'available' | 'missing' | 'unavailable'
+export type AvailabilityFilter = Availability | 'all'
 
 export interface MediaItem {
   id: string
@@ -16,6 +18,8 @@ export interface MediaItem {
   is_favorited: boolean
   is_deleted: boolean
   is_damaged: boolean
+  availability: Availability
+  availability_checked_at: string | null
   created_at: string
 }
 
@@ -36,12 +40,32 @@ export interface BrowseRoot {
   path: string
   name: string
   count: number
+  availability: Availability
+}
+
+export interface AvailabilityJob {
+  id: string
+  status: 'queued' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'interrupted' | 'failed'
+  message: string
+  processed: number
+  total: number
+  available: number
+  missing: number
+  unavailable: number
+  percent: number
+  error: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface BrowseResponse {
   roots: BrowseRoot[]
   folders: string[]
   items: MediaItem[]
+  total: number
+  page: number
+  page_size: number
+  has_next: boolean
 }
 
 export interface DirectoryEntry {

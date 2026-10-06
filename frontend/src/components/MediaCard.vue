@@ -1,11 +1,10 @@
 <script setup lang="ts">
+import MediaImage from './MediaImage.vue'
 import type { MediaItem } from '../api/types'
-import { getStreamUrl, getThumbnailUrl, getPreviewUrl, toggleFavorite, toggleDelete } from '../api/client'
-import { useThumbnailMode } from '../composables/useThumbnailMode'
+import { toggleFavorite, toggleDelete } from '../api/client'
 
 const props = defineProps<{ item: MediaItem }>()
-const emit = defineEmits<{ click: [item: MediaItem]; updated: [item: MediaItem] }>()
-const { thumbMode } = useThumbnailMode()
+const emit = defineEmits<{ click: [item: MediaItem]; updated: [item: MediaItem]; unavailable: [id: string] }>()
 
 function btnInactive() {
   return 'bg-black/45 border-white/40 text-white/80 hover:bg-black/65 hover:border-white/70 hover:text-white'
@@ -27,52 +26,10 @@ async function onDelete(e: MouseEvent) {
 <template>
   <div class="rounded-lg overflow-hidden cursor-pointer group" @click="emit('click', item)">
     <div class="relative">
-      <img
-        v-if="item.media_type === 'image'"
-        :src="getStreamUrl(item.id)"
-        :alt="'Media ' + item.id"
-        class="w-full block"
-        loading="lazy"
-      />
-      <template v-else>
-        <template v-if="thumbMode === 'grid'">
-          <img
-            v-if="item.preview_path"
-            :src="getPreviewUrl(item.id)"
-            :alt="'Preview ' + item.id"
-            class="w-full block"
-            loading="lazy"
-          />
-          <div
-            v-else
-            class="w-full bg-black flex items-center justify-center"
-            style="aspect-ratio: 16/9"
-          >
-            <span class="text-white text-xs text-center px-2">还未生成对应缩略图</span>
-          </div>
-        </template>
-        <template v-else>
-          <img
-            v-if="item.thumbnail_path"
-            :src="getThumbnailUrl(item.id)"
-            :alt="'Cover ' + item.id"
-            class="w-full block"
-            loading="lazy"
-          />
-          <div
-            v-else
-            class="w-full bg-black flex items-center justify-center"
-            style="aspect-ratio: 16/9"
-          >
-            <span class="text-white text-xs text-center px-2">还未生成对应缩略图</span>
-          </div>
-        </template>
-        <div class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors pointer-events-none">
-          <svg class="w-10 h-10 text-white/70" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-        </div>
-      </template>
+      <MediaImage :item="item" @unavailable="emit('unavailable', $event)" />
+      <div v-if="item.media_type === 'video'" class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors pointer-events-none">
+        <svg class="w-10 h-10 text-white/70" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+      </div>
       <div class="absolute right-2 bottom-2 z-10 flex items-center gap-1.5">
         <button
           @click="onDelete"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { createLatestRequest } from '../utils/latestRequest'
 import type { DirectoryListResponse, ImportMediaRequest, MediaType } from '../api/types'
 import { fetchDirectories, fetchImportTargetInfo } from '../api/client'
 import { useTheme } from '../composables/useTheme'
@@ -30,6 +31,7 @@ const { isDark } = useTheme()
 
 const path = ref('')
 const directoryList = ref<DirectoryListResponse | null>(null)
+const directoryRequests = createLatestRequest()
 const loadingDirs = ref(false)
 const checkingTarget = ref(false)
 const error = ref('')
@@ -95,17 +97,11 @@ function buildImportRequest(targetPath: string): ImportMediaRequest {
 
 async function loadDirectory(target?: string) {
   if (importing.value) return
-  loadingDirs.value = true
   error.value = ''
-  try {
-    const res = await fetchDirectories(target)
+  await directoryRequests.run(signal => fetchDirectories(target, signal), res => {
     directoryList.value = res
     path.value = res.path
-  } catch (e: any) {
-    error.value = e.message || '目录读取失败'
-  } finally {
-    loadingDirs.value = false
-  }
+  }, failure => { error.value = failure instanceof Error ? failure.message : '目录读取失败' }, value => { loadingDirs.value = value })
 }
 
 async function requestImportConfirmation() {
@@ -199,6 +195,7 @@ onMounted(async () => {
   if (!progress.value && !importing.value && !unavailable.value) void loadDirectory()
 })
 onUnmounted(() => {
+  directoryRequests.cancel()
   backgroundObserver?.disconnect()
   for (const [element, inert] of background) element.inert = inert
   document.removeEventListener('focusin', onFocusIn)

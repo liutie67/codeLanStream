@@ -2,19 +2,21 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useImportTask } from '../composables/useImportTask'
-import type { ExportTag, MediaItem } from '../api/types'
-import { fetchFeed, getThumbnailUrl, getStreamUrl, getPreviewUrl, purgeDeleted, exportMedia, batchUpdate, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
+import type { AvailabilityFilter, ExportTag, MediaItem } from '../api/types'
+import { fetchFeed, purgeDeleted, exportMedia, batchUpdate, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useTheme } from '../composables/useTheme'
-import { useThumbnailMode } from '../composables/useThumbnailMode'
-import VideoProgress from '../components/VideoProgress.vue'
-import { releaseMediaElement } from '../utils/mediaResource'
+import AvailabilityPanel from '../components/AvailabilityPanel.vue'
+import MediaImage from '../components/MediaImage.vue'
+import VideoPlayer from '../components/VideoPlayer.vue'
+import { createLatestRequest } from '../utils/latestRequest'
 
 type ThumbSize = 'small' | 'medium' | 'large'
 
 const { isDark } = useTheme()
-const { thumbMode } = useThumbnailMode()
 
 const items = ref<MediaItem[]>([])
+const availabilityFilter = ref<AvailabilityFilter>('all')
+const requests = createLatestRequest()
 const filterFav = ref(false)
 const filterDel = ref(false)
 const filterDamaged = ref(false)
@@ -29,8 +31,6 @@ const page = ref(1)
 const currentTotal = ref(0)
 const thumbSize = ref<ThumbSize>('small')
 const previewItem = ref<MediaItem | null>(null)
-const previewVideoEl = ref<HTMLVideoElement | null>(null)
-const previewPaused = ref(true)
 const counts = ref({ all: 0, favorited: 0, deleted: 0, damaged: 0 })
 const sentinelRef = ref<HTMLElement>()
 let observer: IntersectionObserver | null = null
@@ -87,41 +87,43 @@ function cycleThumbSize() {
 async function loadCounts() {
   try {
     const [all, fav, del, damaged] = await Promise.all([
-      fetchFeed({ page: 1, page_size: 1 }),
-      fetchFeed({ page: 1, page_size: 1, is_favorited: true }),
-      fetchFeed({ page: 1, page_size: 1, is_deleted: true }),
-      fetchFeed({ page: 1, page_size: 1, is_damaged: true }),
+      fetchFeed({ availability: 'all', page: 1, page_size: 1 }),
+      fetchFeed({ availability: 'all', page: 1, page_size: 1, is_favorited: true }),
+      fetchFeed({ availability: 'all', page: 1, page_size: 1, is_deleted: true }),
+      fetchFeed({ availability: 'all', page: 1, page_size: 1, is_damaged: true }),
     ])
     counts.value = { all: all.total, favorited: fav.total, deleted: del.total, damaged: damaged.total }
   } catch { /* loadCounts 失败不阻塞页面 */ }
 }
 
 async function loadItems(reset = false) {
-  if (loading.value) return
-  if (!reset && !hasMore.value) return
-
-  loading.value = true
+  if (!reset && (loading.value || !hasMore.value)) return
   if (reset) {
     page.value = 1
     items.value = []
     hasMore.value = true
   }
-
-  try {
-    const params: Record<string, unknown> = { page: page.value, page_size: PAGE_SIZE }
-    if (filterFav.value) params.is_favorited = true
-    if (filterDel.value) params.is_deleted = true
-    if (filterDamaged.value) params.is_damaged = true
-
-    const res = await fetchFeed(params as Parameters<typeof fetchFeed>[0])
+  const params: Parameters<typeof fetchFeed>[0] = { page: page.value, page_size: PAGE_SIZE, availability: availabilityFilter.value }
+  if (filterFav.value) params.is_favorited = true
+  if (filterDel.value) params.is_deleted = true
+  if (filterDamaged.value) params.is_damaged = true
+  await requests.run(signal => fetchFeed(params, signal), res => {
     if (reset) items.value = res.items
     else items.value.push(...res.items)
     currentTotal.value = res.total
     hasMore.value = res.has_next
     page.value++
-  } finally {
-    loading.value = false
-  }
+  }, error => { message.value = error instanceof Error ? error.message : '媒体读取失败' }, value => { loading.value = value })
+}
+
+const selectedInvalidIds = computed(() => items.value.filter(item => selected.value.has(item.id) && item.availability !== 'available').map(item => item.id))
+function availabilityChanged() {
+  selected.value.clear()
+  void Promise.all([loadItems(true), loadCounts()])
+}
+function onManagedUnavailable(id: string) {
+  if (previewItem.value?.id === id) previewItem.value = null
+  availabilityChanged()
 }
 
 async function setFilter(fav: boolean, del: boolean, damaged: boolean) {
@@ -222,24 +224,6 @@ function openPreview(item: MediaItem) {
   previewItem.value = item
 }
 
-function closePreview() {
-  releaseMediaElement(previewVideoEl.value)
-  previewItem.value = null
-}
-
-function onPreviewKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') closePreview()
-  else if (previewItem.value?.media_type === 'video' && previewVideoEl.value) {
-    if (e.key === 'j') previewVideoEl.value.currentTime = Math.max(0, previewVideoEl.value.currentTime - 30)
-    else if (e.key === 'k') previewVideoEl.value.currentTime = Math.min(previewVideoEl.value.duration || 0, previewVideoEl.value.currentTime + 30)
-  }
-}
-
-watch(previewItem, (val) => {
-  if (val) window.addEventListener('keydown', onPreviewKeydown)
-  else window.removeEventListener('keydown', onPreviewKeydown)
-})
-
 // Infinite scroll
 function setupObserver() {
   observer?.disconnect()
@@ -260,9 +244,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  releaseMediaElement(previewVideoEl.value)
+  requests.cancel()
   observer?.disconnect()
-  window.removeEventListener('keydown', onPreviewKeydown)
 })
 watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCounts()]))
 </script>
@@ -288,6 +271,8 @@ watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCou
     <main class="px-4 lg:px-6 py-6">
       <!-- 消息提示 -->
       <div v-if="message" :class="['mb-4 px-4 py-2 rounded-lg text-sm text-center', isDark ? 'bg-gray-800' : 'bg-gray-200']">{{ message }}</div>
+
+      <AvailabilityPanel :selected-ids="[...selected]" :invalid-ids="selectedInvalidIds" @changed="availabilityChanged" />
 
       <!-- 操作栏 -->
       <div class="flex flex-wrap items-center gap-3 mb-6">
@@ -339,7 +324,10 @@ watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCou
 
       <!-- 筛选 + 批量操作 + 缩略图尺寸 -->
       <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <select v-model="availabilityFilter" @change="availabilityChanged" aria-label="媒体可用状态" class="px-3 py-1 rounded bg-gray-500/20 text-xs">
+            <option value="all">全部状态</option><option value="available">可用</option><option value="missing">缺失</option><option value="unavailable">暂不可访问</option>
+          </select>
           <button
             @click="setFilter(false, false, false)"
             :class="[
@@ -416,47 +404,14 @@ watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCou
             @click.stop
             class="w-4 h-4 accent-blue-500 shrink-0"
           />
-          <img
-            v-if="item.media_type === 'image'"
-            :src="getStreamUrl(item.id)"
-            :class="[thumbClasses, 'object-cover rounded shrink-0']"
-            loading="lazy"
-            decoding="async"
-          />
-          <template v-else>
-            <img
-              v-if="thumbMode === 'grid' && item.preview_path"
-              :src="getPreviewUrl(item.id)"
-              :class="[thumbClasses, 'object-cover rounded shrink-0']"
-              loading="lazy"
-              decoding="async"
-            />
-            <img
-              v-else-if="thumbMode !== 'grid' && item.thumbnail_path"
-              :src="getThumbnailUrl(item.id)"
-              :class="[thumbClasses, 'object-cover rounded shrink-0']"
-              loading="lazy"
-              decoding="async"
-            />
-            <div
-              v-else-if="thumbMode === 'grid' && !item.preview_path"
-              :class="[thumbClasses, 'bg-black flex items-center justify-center rounded shrink-0']"
-            >
-              <span class="text-white text-[8px] text-center leading-tight px-1">未生成</span>
-            </div>
-            <div
-              v-else
-              :class="[thumbClasses, 'object-cover rounded shrink-0']"
-              class="bg-black flex items-center justify-center"
-            >
-              <span class="text-white text-[8px] text-center leading-tight px-1">未生成</span>
-            </div>
-          </template>
+          <MediaImage v-if="item.availability === 'available'" :item="item" compact :class="[thumbClasses, 'shrink-0']" @unavailable="onManagedUnavailable" />
+          <div v-else :class="[thumbClasses, 'shrink-0 rounded bg-gray-500/10 flex items-center justify-center text-[10px] text-amber-500']">{{ item.availability === 'missing' ? '原文件缺失' : '暂不可访问' }}</div>
           <div class="flex-1 min-w-0">
             <p class="text-sm truncate">{{ item.file_path.split(/[/\\]/).pop() }}</p>
             <p class="text-xs text-gray-500">{{ item.media_type }} · {{ formatMediaSize(item.size_bytes) }}</p>
           </div>
           <div class="flex items-center gap-2 shrink-0" @click.stop>
+            <span v-if="item.availability !== 'available'" class="text-xs text-amber-500">{{ item.availability === 'missing' ? '缺失' : '暂不可访问' }}</span>
             <span v-if="item.is_favorited" class="text-xs text-pink-400">已收藏</span>
             <span v-if="item.is_deleted" class="text-xs text-red-400">已删除</span>
             <span v-if="item.is_damaged" class="text-xs text-purple-400">已损坏</span>
@@ -486,50 +441,8 @@ watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCou
       <div v-if="!hasMore && items.length > 0" class="py-4 text-center text-gray-500 text-xs">已加载全部</div>
     </main>
 
-    <!-- Preview modal -->
     <Teleport to="body">
-      <div
-        v-if="previewItem"
-        class="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-        @click="closePreview"
-      >
-        <button
-          @click="closePreview"
-          class="fixed top-4 right-4 text-white/70 hover:text-white text-3xl z-10"
-        >
-          &times;
-        </button>
-        <template v-if="previewItem.media_type === 'video'">
-          <div class="relative max-w-full max-h-full">
-            <video
-              ref="previewVideoEl"
-              :src="getStreamUrl(previewItem.id)"
-              autoplay
-              class="max-w-full max-h-full rounded-lg"
-              @click.stop="previewVideoEl && (previewVideoEl.paused ? previewVideoEl.play() : previewVideoEl.pause())"
-              @pause="previewPaused = true"
-              @play="previewPaused = false"
-            />
-            <div
-              v-if="previewPaused"
-              class="absolute inset-0 flex items-center justify-center pointer-events-none"
-            >
-              <div class="w-20 h-20 rounded-full bg-black/40 flex items-center justify-center">
-                <svg class="w-10 h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-              </div>
-            </div>
-          </div>
-          <div class="fixed bottom-0 inset-x-0 z-10 px-4 pb-4">
-            <VideoProgress :video="previewVideoEl" />
-          </div>
-        </template>
-        <img
-          v-else
-          :src="getStreamUrl(previewItem.id)"
-          class="max-w-full max-h-full object-contain rounded-lg"
-          @click.stop
-        />
-      </div>
+      <VideoPlayer v-if="previewItem" :item="previewItem" @close="previewItem = null" @unavailable="onManagedUnavailable" />
     </Teleport>
   </div>
 </template>
