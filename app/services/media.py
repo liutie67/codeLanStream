@@ -1,6 +1,8 @@
 import asyncio
+import logging
 import os
 import shutil
+import stat
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -11,14 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.media import Media, MediaType
-from app.schemas.media import FeedResponse, MediaOut
-from app.schemas.media import AvailabilityFilter
+from app.schemas.media import AvailabilityFilter, FeedResponse, MediaOut, PurgeFailure, PurgeResponse
 from app.services.availability import refresh_directories, require_directory, validated_rows
 from app.services.thumbnail import generate_thumbnail, generate_preview
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 ExportTag = Literal["favorited", "deleted", "damaged"]
 FeedSort = Literal["created_desc", "file_path_asc", "size_desc"]
+logger = logging.getLogger(__name__)
 
 
 def _classify_media(ext: str) -> MediaType | None:
@@ -478,21 +480,89 @@ async def toggle_damaged(db: AsyncSession, media_id: str) -> MediaOut:
     return MediaOut.model_validate(media)
 
 
-async def purge_deleted(db: AsyncSession) -> int:
+def _unlink_purge_file(file_path: str) -> None:
+    """Remove one file, handling Windows' read-only attribute and missing files."""
+    try:
+        try:
+            os.remove(file_path)
+        except PermissionError:
+            if os.name != "nt":
+                raise
+            info = os.stat(file_path, follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode)
+                    or not info.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY):
+                raise
+            # The user has explicitly requested physical deletion. Only clear
+            # read-only on this file; do not change directory permissions/ACLs.
+            os.chmod(file_path, info.st_mode | stat.S_IWRITE)
+            try:
+                os.remove(file_path)
+            except FileNotFoundError:
+                return
+            except OSError:
+                try:
+                    os.chmod(file_path, info.st_mode)
+                except OSError:
+                    logger.warning("Could not restore read-only attribute: %s", file_path)
+                raise
+    except FileNotFoundError:
+        # Missing source/assets already satisfy the requested deletion.
+        pass
+
+
+async def _remove_purge_file(file_path: str) -> None:
+    for attempt, delay in enumerate((0, 0.1, 0.3)):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await asyncio.to_thread(_unlink_purge_file, file_path)
+            return
+        except OSError as exc:
+            # A player/previewer may release its handle just after playback stops.
+            if (os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33}
+                    or attempt == 2):
+                raise
+
+
+def _purge_error_message(exc: OSError) -> str:
+    if getattr(exc, "winerror", None) in {32, 33}:
+        return "文件正被占用，请关闭视频播放、资源管理器预览或其他使用该文件的程序后重试"
+    if isinstance(exc, PermissionError):
+        if os.name == "nt":
+            return "访问被拒绝，请关闭占用文件的程序，并检查运行服务的账户是否有删除权限"
+        return "访问被拒绝，请检查运行服务的账户是否有删除权限及目录是否可写"
+    return f"文件删除失败：{exc}"
+
+
+async def purge_deleted(db: AsyncSession) -> PurgeResponse:
     result = await db.execute(select(Media).where(Media.is_deleted == True))
     items = result.scalars().all()
     count = 0
+    processed_count = 0
+    failures: list[PurgeFailure] = []
     for media in items:
-        if media.file_path and os.path.exists(media.file_path):
-            os.remove(media.file_path)
-        if media.thumbnail_path and os.path.exists(media.thumbnail_path):
-            os.remove(media.thumbnail_path)
-        if media.preview_path and os.path.exists(media.preview_path):
-            os.remove(media.preview_path)
-        await db.delete(media)
-        count += 1
+        processed_count += 1
+        for file_path in (media.file_path, media.thumbnail_path, media.preview_path):
+            if not file_path:
+                continue
+            try:
+                await _remove_purge_file(file_path)
+            except OSError as exc:
+                logger.warning("Could not purge media %s (%s): %s", media.id, file_path, exc)
+                failures.append(PurgeFailure(
+                    media_id=media.id, file_path=file_path, error=_purge_error_message(exc)))
+                # Keep the record (and any remaining assets) for a later retry.
+                break
+        else:
+            await db.delete(media)
+            count += 1
+        if len(failures) >= settings.purge_failure_limit:
+            # Stop filesystem work at the failure limit, but still commit any
+            # successful deletions completed before the limit was reached.
+            break
     await db.commit()
-    return count
+    return PurgeResponse(deleted_count=count, failed_count=len(failures), failures=failures,
+                         unprocessed_count=len(items) - processed_count)
 
 
 async def export_favorites(db: AsyncSession, target_dir: str) -> int:

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -11,6 +12,7 @@ class Settings(BaseSettings):
     supported_video_exts: set[str] = {".mp4", ".webm", ".mkv", ".avi", ".mov", ".flv", ".m4v"}
     supported_image_exts: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     feed_page_size: int = 20
+    purge_failure_limit: int = Field(default=10, ge=1)
 
     @property
     def supported_exts(self) -> set[str]:

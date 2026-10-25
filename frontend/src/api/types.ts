@@ -3,6 +3,19 @@ export type ExportTag = 'favorited' | 'deleted' | 'damaged'
 export type Availability = 'available' | 'missing' | 'unavailable'
 export type AvailabilityFilter = Availability | 'all'
 
+export interface PurgeFailure {
+  media_id: string
+  file_path: string
+  error: string
+}
+
+export interface PurgeResponse {
+  deleted_count: number
+  failed_count: number
+  failures: PurgeFailure[]
+  unprocessed_count: number
+}
+
 export interface MediaItem {
   id: string
   file_path: string

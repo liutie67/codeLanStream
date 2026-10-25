@@ -10,6 +10,7 @@ import type {
   ExportTag,
   AvailabilityFilter,
   AvailabilityJob,
+  PurgeResponse,
 } from './types'
 
 const API_BASE = '/api/media'
@@ -125,9 +126,12 @@ export async function toggleDamaged(id: string): Promise<MediaItem> {
   return res.json()
 }
 
-export async function purgeDeleted(): Promise<{ deleted_count: number }> {
+export async function purgeDeleted(): Promise<PurgeResponse> {
   const res = await fetch(`${API_BASE}/manage/purge`, { method: 'POST' })
-  if (!res.ok) throw new Error(`清理失败: ${res.status}`)
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(typeof data?.detail === 'string' ? data.detail : `清理失败: ${res.status}`)
+  }
   return res.json()
 }
 

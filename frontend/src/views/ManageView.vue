@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useImportTask } from '../composables/useImportTask'
-import type { AvailabilityFilter, ExportTag, MediaItem } from '../api/types'
+import type { AvailabilityFilter, ExportTag, MediaItem, PurgeFailure } from '../api/types'
 import { fetchFeed, purgeDeleted, exportMedia, batchUpdate, toggleFavorite, toggleDelete, toggleDamaged } from '../api/client'
 import { useTheme } from '../composables/useTheme'
 import AvailabilityPanel from '../components/AvailabilityPanel.vue'
@@ -25,6 +25,9 @@ const exportDir = ref('')
 const exportTags = ref<ExportTag[]>(['favorited'])
 const showExportOptions = ref(false)
 const message = ref('')
+const purging = ref(false)
+const purgeFailures = ref<PurgeFailure[]>([])
+const purgeUnprocessedCount = ref(0)
 const loading = ref(false)
 const hasMore = ref(true)
 const page = ref(1)
@@ -171,18 +174,34 @@ async function doBatch(action: string) {
 }
 
 async function doPurge() {
+  if (purging.value) return
   if (!counts.value.deleted) {
     message.value = '没有需要清理的已删除文件'
     setTimeout(() => message.value = '', 3000)
     return
   }
   if (!confirm(`确定物理删除 ${counts.value.deleted} 个文件？此操作不可撤销。`)) return
+  purging.value = true
+  purgeFailures.value = []
+  purgeUnprocessedCount.value = 0
   try {
+    previewItem.value = null
+    // Wait for VideoPlayer to unmount and release the Windows file handle.
+    await nextTick()
     const res = await purgeDeleted()
-    message.value = `已删除 ${res.deleted_count} 个文件`
+    purgeFailures.value = res.failures
+    purgeUnprocessedCount.value = res.unprocessed_count
+    message.value = res.unprocessed_count
+      ? `已清理 ${res.deleted_count} 项，累计 ${res.failed_count} 项失败，已停止本次清理，剩余 ${res.unprocessed_count} 项未处理`
+      : res.failed_count
+      ? `已清理 ${res.deleted_count} 项，${res.failed_count} 项失败，已保留记录，可处理后重试`
+      : `已清理 ${res.deleted_count} 项`
+    selected.value.clear()
     await Promise.all([loadItems(true), loadCounts()])
   } catch (e: any) {
     message.value = e.message || '清理失败'
+  } finally {
+    purging.value = false
   }
   setTimeout(() => message.value = '', 3000)
 }
@@ -271,6 +290,16 @@ watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCou
     <main class="px-4 lg:px-6 py-6">
       <!-- 消息提示 -->
       <div v-if="message" :class="['mb-4 px-4 py-2 rounded-lg text-sm text-center', isDark ? 'bg-gray-800' : 'bg-gray-200']">{{ message }}</div>
+      <details v-if="purgeFailures.length" open class="mb-4 p-4 rounded-lg border border-red-500/30 text-sm" role="status">
+        <summary class="cursor-pointer text-red-400">{{ purgeFailures.length }} 项清理失败，处理后可再次点击清理</summary>
+        <p v-if="purgeUnprocessedCount" class="mt-2 text-gray-500">失败次数达到上限，已停止本次清理；另有 {{ purgeUnprocessedCount }} 项未处理。</p>
+        <ul class="mt-3 space-y-3 max-h-64 overflow-auto">
+          <li v-for="failure in purgeFailures" :key="failure.media_id">
+            <p class="break-all">{{ failure.file_path }}</p>
+            <p class="text-gray-500">{{ failure.error }}</p>
+          </li>
+        </ul>
+      </details>
 
       <AvailabilityPanel :selected-ids="[...selected]" :invalid-ids="selectedInvalidIds" @changed="availabilityChanged" />
 
@@ -278,9 +307,10 @@ watch(useImportTask().revision, () => void Promise.all([loadItems(true), loadCou
       <div class="flex flex-wrap items-center gap-3 mb-6">
         <button
           @click="doPurge"
-          class="px-4 py-2 bg-red-600/20 text-red-400 border border-red-600/30 rounded-lg text-sm hover:bg-red-600/30 transition-colors"
+          :disabled="purging"
+          class="px-4 py-2 bg-red-600/20 text-red-400 border border-red-600/30 rounded-lg text-sm hover:bg-red-600/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
         >
-          一键清理已删除 ({{ counts.deleted }})
+          {{ purging ? '清理中...' : `一键清理已删除 (${counts.deleted})` }}
         </button>
         <div class="relative flex items-center gap-2">
           <input

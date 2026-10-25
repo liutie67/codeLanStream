@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.media import Media, MediaType
-from app.schemas.media import AvailabilityFilter, FeedResponse, MediaOut
+from app.schemas.media import AvailabilityFilter, FeedResponse, MediaOut, PurgeResponse
 from app.services.availability import (
     BROWSE_TIMEOUT, SourceUnavailable, check_records, file_info, remove_records, snapshot, source_error,
 )
@@ -290,10 +290,9 @@ class ImportTargetInfo(BaseModel):
     existing_count: int
 
 
-@router.post("/manage/purge")
+@router.post("/manage/purge", response_model=PurgeResponse)
 async def purge(db: AsyncSession = Depends(get_db)):
-    count = await purge_deleted(db)
-    return {"deleted_count": count}
+    return await purge_deleted(db)
 
 
 @router.post("/manage/export-favorites")

@@ -37,3 +37,16 @@ class FeedResponse(BaseModel):
     page: int
     page_size: int
     has_next: bool
+
+
+class PurgeFailure(BaseModel):
+    media_id: str
+    file_path: str
+    error: str
+
+
+class PurgeResponse(BaseModel):
+    deleted_count: int
+    failed_count: int
+    failures: list[PurgeFailure]
+    unprocessed_count: int = 0
